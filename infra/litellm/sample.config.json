@@ -1,0 +1,66 @@
+{
+  "models": [
+    {
+      "name": "baseten-nvidia-nemotron-3-super",
+      "litellm_params": {
+        "model": "baseten/nvidia/Nemotron-120B-A12B",
+        "api_key": "your-baseten-api-key"
+      }
+    },
+    {
+      "name": "mistral-nemo-12b",
+      "litellm_params": {
+        "model": "ollama_chat/mistral-nemo:12b",
+        "api_base": "http://host.docker.internal:11434"
+      },
+      "model_info": {
+        "description": "ollama mistral nemo",
+        "supports_function_calling": true
+      }
+    },
+    {
+      "name": "claude-sonnet",
+      "litellm_params": {
+        "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "aws_access_key_id": "your-aws-access-key-id",
+        "aws_secret_access_key": "your-aws-secret-access-key",
+        "aws_region_name": "us-east-1"
+      },
+      "model_info": {
+        "description": "Claude Sonnet 4 via AWS Bedrock"
+      }
+    },
+    {
+      "name": "mistral-large-bedrock",
+      "litellm_params": {
+        "model": "bedrock/mistral.mistral-large-3-675b-instruct",
+        "aws_access_key_id": "your-aws-access-key-id",
+        "aws_secret_access_key": "your-aws-secret-access-key",
+        "aws_region_name": "us-east-1"
+      }
+    },
+    {
+      "name": "opengpt-watsonx",
+      "litellm_params": {
+        "model": "watsonx/openai/gpt-oss-120b",
+        "api_key": "your-watsonx-api-key",
+        "api_base": "https://us-south.ml.cloud.ibm.com",
+        "project_id": "your-watsonx-project-id"
+      },
+      "model_info": {
+        "description": "GPT-OSS-120B via watsonx.ai"
+      }
+    }
+  ],
+  "teams": [
+    {
+      "alias": "primary",
+      "models": [
+        "claude-sonnet",
+        "mistral-large-bedrock",
+        "baseten-nvidia-nemotron-3-super",
+        "opengpt-watsonx"
+      ]
+    }
+  ]
+}

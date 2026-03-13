@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+infra/litellm/config.json
+
+# Claude Code
+CLAUDE.md
+.claude/
+memory/

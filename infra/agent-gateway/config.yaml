@@ -1,0 +1,62 @@
+# Agent Gateway config — routes A2A agents and MCP tool servers
+# A2A agents: data-agent (5001), security-agent (5002)
+# MCP servers: cost-api (5003), employee-lookup (5004)
+
+binds:
+  # --- A2A agent on dedicated port per agent? No — use path rewrite ---
+  - port: 3000
+    listeners:
+      - name: main
+        protocol: HTTP
+        routes:
+          # --- A2A: data-agent ---
+          - name: data-agent
+            matches:
+              - path:
+                  pathPrefix: /data-agent
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: [content-type, cache-control]
+              a2a: {}
+              urlRewrite:
+                path:
+                  prefix: /
+            backends:
+              - host: host.docker.internal:5001
+
+          # --- A2A: security-agent ---
+          - name: security-agent
+            matches:
+              - path:
+                  pathPrefix: /security-agent
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: [content-type, cache-control]
+              a2a: {}
+              urlRewrite:
+                path:
+                  prefix: /
+            backends:
+              - host: host.docker.internal:5002
+
+          # --- MCP tool federation ---
+          - name: mcp-tools
+            matches:
+              - path:
+                  pathPrefix: /mcp
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: [content-type, cache-control, mcp-protocol-version]
+                exposeHeaders: [Mcp-Session-Id]
+            backends:
+              - mcp:
+                  targets:
+                    - name: cost-api
+                      mcp:
+                        host: http://host.docker.internal:5003/mcp
+                    - name: employee-lookup
+                      mcp:
+                        host: http://host.docker.internal:5004/mcp

@@ -1,0 +1,12 @@
+# LiteLLM Proxy Configuration
+# Models are added dynamically per-team via API, not here.
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+
+general_settings:
+  master_key: sk-master-key-change-me
+  database_url: postgresql://litellm:litellm@litellm-db:5432/litellm
+  store_model_in_db: true
+
+litellm_settings:
+  drop_params: true
+  set_verbose: true

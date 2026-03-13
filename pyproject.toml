@@ -1,0 +1,20 @@
+[project]
+name = "solis-poc"
+version = "0.1.0"
+description = "Proof-of-concept: chat is a skill, not the product"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2.0",
+    "apscheduler>=3.10,<4",
+    "langchain-openai",
+    "langgraph",
+    "python-dotenv",
+    "python-frontmatter",
+    "httpx",
+    "sse-starlette",
+    "langchain-mcp-adapters",
+    "a2a-sdk",
+    "mcp[cli]",
+]
