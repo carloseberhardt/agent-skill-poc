@@ -8,9 +8,23 @@ Run: uv run python mock-agents/employee_lookup.py
 Serves on port 5004.
 """
 
+import logging
+import os
+
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("employee-lookup", host="0.0.0.0", port=5004)
+
+wire = logging.getLogger("wire")
+if os.getenv("WIRE_LOG") == "true":
+    logging.basicConfig(level=logging.INFO)
+    wire.setLevel(logging.INFO)
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("\033[34m%(asctime)s [wire:employee] %(message)s\033[0m", datefmt="%H:%M:%S"))
+    wire.addHandler(_h)
+    wire.propagate = False
+else:
+    wire.setLevel(logging.WARNING)
 
 _EMPLOYEES = {
     "jdoe": {
@@ -53,6 +67,36 @@ _EMPLOYEES = {
         "clearance": "top-secret",
         "notes": "Manages data platform team. Escalation contact for data incidents.",
     },
+    "agarcia": {
+        "id": "agarcia",
+        "name": "Ana Garcia",
+        "department": "People Analytics",
+        "role": "HR Data Analyst",
+        "manager": "Robert Chen",
+        "location": "Chicago",
+        "clearance": "confidential",
+        "notes": "Authorized for HR and compensation datasets. Leads quarterly workforce reporting.",
+    },
+    "tpatel": {
+        "id": "tpatel",
+        "name": "Tariq Patel",
+        "department": "Machine Learning",
+        "role": "ML Engineer",
+        "manager": "Sarah Kim",
+        "location": "Seattle",
+        "clearance": "secret",
+        "notes": "Builds and deploys production ML models. Temporary staging write access for model rollout.",
+    },
+    "kwong": {
+        "id": "kwong",
+        "name": "Kevin Wong",
+        "department": "Product",
+        "role": "Product Manager",
+        "manager": "Elena Vasquez",
+        "location": "San Francisco",
+        "clearance": "confidential",
+        "notes": "Cross-functional PM for data products. Recently onboarded to ML model registry.",
+    },
 }
 
 
@@ -66,11 +110,14 @@ def lookup_employee(name_or_id: str) -> dict:
     Args:
         name_or_id: Employee username (e.g. "jdoe"), ID, or partial name to search for.
     """
+    wire.info("◀ lookup_employee(%s)", name_or_id)
     key = name_or_id.lower().strip()
 
     # Direct ID match
     if key in _EMPLOYEES:
-        return _EMPLOYEES[key]
+        emp = _EMPLOYEES[key]
+        wire.info("▶ found → %s (%s, %s)", emp["name"], emp["role"], emp["department"])
+        return emp
 
     # Partial name search
     matches = [

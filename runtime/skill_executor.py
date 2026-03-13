@@ -124,11 +124,46 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
+def _repair_json(text: str) -> str:
+    """Fix common LLM JSON issues: unescaped newlines inside string values."""
+    # Replace literal newlines inside JSON strings with \\n.
+    # Walk char-by-char tracking whether we're inside a quoted string.
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and in_string:
+            # Escaped char — keep both
+            result.append(ch)
+            if i + 1 < len(text):
+                i += 1
+                result.append(text[i])
+            i += 1
+            continue
+        if ch == '"':
+            in_string = not in_string
+        elif ch == '\n' and in_string:
+            result.append('\\n')
+            i += 1
+            continue
+        result.append(ch)
+        i += 1
+    return ''.join(result)
+
+
 def _parse_json_response(response: str, skill: Skill) -> dict:
     """Parse LLM JSON response with fallback to raw text."""
     cleaned = _strip_code_fences(response)
+    # Try parsing as-is first
     try:
         return json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # Try repairing common LLM issues (unescaped newlines in strings)
+    try:
+        repaired = _repair_json(cleaned)
+        return json.loads(repaired)
     except (json.JSONDecodeError, TypeError):
         logger.warning("Could not parse JSON from %s response, using raw text", skill.name)
         if skill.runtime_config.ui_type in ("card", "approval"):

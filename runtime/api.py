@@ -11,6 +11,7 @@ Endpoints:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -169,6 +170,21 @@ async def handle_action(request: Request):
         agent_url = f"{gateway_url}/{target_agent}"
         response_text = await agent_mod._call_a2a_agent(agent_url, message)
 
+        # Try to extract a clean summary from the agent response
+        agent_summary = response_text
+        try:
+            parsed = json.loads(response_text)
+            if isinstance(parsed, dict):
+                if "entry" in parsed:
+                    entry = parsed["entry"]
+                    agent_summary = f"Audit {entry.get('audit_id', 'logged')} — {entry.get('status', 'recorded')}"
+                elif "action" in parsed:
+                    agent_summary = parsed["action"]
+                else:
+                    agent_summary = parsed.get("status", response_text[:120])
+        except (json.JSONDecodeError, TypeError):
+            agent_summary = response_text[:120]
+
         # Broadcast a status card so the UI shows confirmation
         result = SkillResult(
             skill_name=f"action → {target_agent}",
@@ -179,7 +195,7 @@ async def handle_action(request: Request):
                     f"Decision: **{decision}**",
                     f"Action: {action[:200]}",
                     f"Logged with: {target_agent}",
-                    f"Agent response: {response_text[:200]}",
+                    f"Agent response: {agent_summary}",
                 ],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
@@ -223,6 +239,7 @@ async def status():
         "status": "running",
         "uptime_seconds": round(time.time() - _start_time, 1),
         "skills_loaded": len(_skills),
+        "model": os.getenv("LITELLM_MODEL", "unknown"),
         "event_subscriptions": _event_bus.subscriptions if _event_bus else {},
     }
 

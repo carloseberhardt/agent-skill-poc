@@ -24,6 +24,7 @@ from langgraph.prebuilt import create_react_agent
 load_dotenv()
 
 logger = logging.getLogger("solis.agent")
+wire = logging.getLogger("solis.wire")
 
 _base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
 _model = os.getenv("LITELLM_MODEL", "claude-sonnet-team-b")
@@ -70,18 +71,30 @@ async def _init_mcp_tools() -> list:
         return []
 
 
+def _is_text_part(part: dict) -> bool:
+    """Check if an A2A part is a text part — handles both 'type' and 'kind' keys."""
+    return part.get("type") == "text" or part.get("kind") == "text"
+
+
 def _extract_a2a_text(response: dict) -> str:
     """Extract text content from an A2A JSON-RPC response."""
     # A2A message/send returns {result: {type: "task", ...}} with artifacts
     result = response.get("result", response)
+    texts = []
 
     # Check for artifacts (list of parts)
-    artifacts = result.get("artifacts", [])
-    texts = []
-    for artifact in artifacts:
+    for artifact in result.get("artifacts", []):
         for part in artifact.get("parts", []):
-            if part.get("type") == "text":
+            if _is_text_part(part):
                 texts.append(part["text"])
+
+    if texts:
+        return "\n".join(texts)
+
+    # Check for direct parts on result (kind: "message" format from a2a-sdk)
+    for part in result.get("parts", []):
+        if _is_text_part(part):
+            texts.append(part["text"])
 
     if texts:
         return "\n".join(texts)
@@ -91,7 +104,7 @@ def _extract_a2a_text(response: dict) -> str:
     message = status.get("message", {})
     if isinstance(message, dict):
         for part in message.get("parts", []):
-            if part.get("type") == "text":
+            if _is_text_part(part):
                 texts.append(part["text"])
     elif isinstance(message, str):
         texts.append(message)
@@ -116,10 +129,14 @@ async def _call_a2a_agent(agent_url: str, query: str) -> str:
             }
         },
     }
+    wire.info("A2A ▶ POST %s", agent_url)
+    wire.info("A2A ▶ %s", query[:200])
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(agent_url, json=payload)
         resp.raise_for_status()
-        return _extract_a2a_text(resp.json())
+        text = _extract_a2a_text(resp.json())
+        wire.info("A2A ◀ %s → %s", agent_url.split("/")[-1], text[:200])
+        return text
 
 
 async def _init_a2a_tools() -> list:
@@ -190,8 +207,19 @@ async def invoke(prompt: str, system_prompt: str = "") -> str:
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
+    wire.info("LLM ▶ %s → %s", _model, prompt[:150])
     result = await _agent.ainvoke({"messages": messages})
-    return result["messages"][-1].content
+    response = result["messages"][-1].content
+    # Log tool calls from intermediate messages
+    for msg in result["messages"]:
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            for tc in msg.tool_calls:
+                args_str = json.dumps(tc.get("args", {}))[:120]
+                wire.info("LLM ⤷ tool_call %s(%s)", tc["name"], args_str)
+        if hasattr(msg, "name") and msg.type == "tool":
+            wire.info("LLM ⤶ tool_result %s → %s", msg.name, str(msg.content)[:150])
+    wire.info("LLM ◀ %s (%d chars)", _model, len(response))
+    return response
 
 
 async def refresh_tools() -> None:

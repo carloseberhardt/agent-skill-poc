@@ -4,140 +4,578 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Solis Runtime</title>
+
+<!-- IBM Plex Sans -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">
+
+<!-- Carbon Web Components (esm.sh resolves transitive deps like tslib) -->
+<script type="module" src="https://esm.sh/@carbon/web-components@2.15.0/es/components/button/index.js"></script>
+<!-- tag replaced with native styled spans -->
+<script type="module" src="https://esm.sh/@carbon/web-components@2.15.0/es/components/text-input/index.js"></script>
+<script type="module" src="https://esm.sh/@carbon/web-components@2.15.0/es/components/textarea/index.js"></script>
+<script type="module" src="https://esm.sh/@carbon/web-components@2.15.0/es/components/notification/index.js"></script>
+
 <style>
+  /* ── Carbon tokens (subset) ───────────────────────────────── */
+  :root {
+    --cds-background:           #161616;
+    --cds-background-hover:     #262626;
+    --cds-layer-01:             #262626;
+    --cds-layer-02:             #393939;
+    --cds-layer-accent-01:      #393939;
+    --cds-border-subtle-00:     #393939;
+    --cds-border-subtle-01:     #525252;
+    --cds-text-primary:         #f4f4f4;
+    --cds-text-secondary:       #c6c6c6;
+    --cds-text-placeholder:     #6f6f6f;
+    --cds-text-disabled:        #525252;
+    --cds-interactive:          #4589ff;
+    --cds-focus:                #ffffff;
+    --cds-support-success:      #42be65;
+    --cds-support-warning:      #f1c21b;
+    --cds-support-error:        #fa4d56;
+    --cds-support-info:         #4589ff;
+    --cds-link-primary:         #78a9ff;
+    --ibm-blue-60:              #0f62fe;
+    --ibm-blue-40:              #78a9ff;
+    --ibm-gray-90:              #262626;
+    --ibm-gray-80:              #393939;
+    --ibm-gray-70:              #525252;
+    --ibm-gray-50:              #8d8d8d;
+    --ibm-gray-30:              #c6c6c6;
+    --ibm-gray-10:              #f4f4f4;
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; background: #f5f5f5; color: #1a1a1a; }
 
-  /* Left pane — skills */
-  .sidebar { width: 260px; background: #1e293b; color: #e2e8f0; padding: 20px; overflow-y: auto; flex-shrink: 0; }
-  .sidebar h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 16px; }
-  .skill-card { background: #334155; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
-  .skill-card h3 { font-size: 14px; margin-bottom: 6px; }
-  .skill-card p { font-size: 12px; color: #94a3b8; margin-bottom: 8px; }
-  .badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; text-transform: uppercase; }
-  .badge-manual { background: #3b82f6; color: white; }
-  .badge-scheduled { background: #10b981; color: white; }
-  .badge-event { background: #f59e0b; color: white; }
-  .skill-card button { background: #6366f1; color: white; border: none; border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; margin-top: 6px; }
-  .skill-card button:hover { background: #4f46e5; }
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--cds-background);
+    color: var(--cds-text-primary);
+    overflow: hidden;
+  }
 
-  /* Center pane — content */
-  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .main-header { background: white; border-bottom: 1px solid #e5e7eb; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
-  .main-header h1 { font-size: 18px; font-weight: 600; }
-  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #10b981; display: inline-block; margin-right: 8px; }
-  .content { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  /* ── Shell header ─────────────────────────────────────────── */
+  .shell-header {
+    height: 48px;
+    background: #000000;
+    border-bottom: 1px solid var(--ibm-gray-80);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    flex-shrink: 0;
+    gap: 12px;
+    z-index: 100;
+  }
+  .shell-header .product-name {
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--cds-text-primary);
+    letter-spacing: 0.1px;
+  }
+  .shell-header .product-name span {
+    color: var(--ibm-gray-50);
+    font-weight: 300;
+  }
+  .shell-header .divider {
+    width: 1px;
+    height: 16px;
+    background: var(--ibm-gray-70);
+  }
+  .shell-header .env-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ibm-gray-50);
+    background: var(--ibm-gray-90);
+    padding: 2px 8px;
+    border: 1px solid var(--ibm-gray-80);
+  }
+  .shell-header .runtime-status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--ibm-gray-50);
+  }
+  .status-indicator {
+    width: 8px;
+    height: 8px;
+    background: var(--cds-support-success);
+  }
+  .status-indicator.offline { background: var(--cds-support-error); }
 
-  /* Chat */
-  .chat-input-area { background: white; border-top: 1px solid #e5e7eb; padding: 16px 24px; display: flex; gap: 10px; }
-  .chat-input-area input { flex: 1; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none; }
-  .chat-input-area input:focus { border-color: #6366f1; }
-  .chat-input-area button { background: #6366f1; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; }
-  .bubble { max-width: 70%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
-  .bubble-user { background: #6366f1; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
-  .bubble-assistant { background: white; border: 1px solid #e5e7eb; align-self: flex-start; border-bottom-left-radius: 4px; }
+  /* ── Body layout ──────────────────────────────────────────── */
+  .body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
 
-  /* Cards */
-  .result-card { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #6366f1; }
-  .result-card h3 { font-size: 16px; margin-bottom: 10px; }
-  .result-card ul { margin: 0 0 10px 20px; font-size: 14px; line-height: 1.7; }
-  .result-card .meta { font-size: 11px; color: #94a3b8; }
-  .result-card.approval { border-left-color: #f59e0b; background: #fffbeb; }
-  .result-card.approval .action-bar { margin-top: 14px; display: flex; gap: 10px; }
-  .result-card.approval .action-bar button { padding: 8px 18px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; font-weight: 600; }
-  .btn-confirm { background: #10b981; color: white; }
-  .btn-reject { background: #ef4444; color: white; }
-  .result-card .action-desc { margin-top: 10px; padding: 10px; background: #fef3c7; border-radius: 6px; font-size: 13px; font-weight: 500; }
+  /* ── Left nav ─────────────────────────────────────────────── */
+  .sidenav {
+    width: 256px;
+    background: var(--cds-layer-01);
+    border-right: 1px solid var(--cds-border-subtle-00);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .sidenav-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--cds-border-subtle-00);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .sidenav-header h2 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ibm-gray-30);
+  }
+  .sidenav-skills {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+  .skill-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--cds-border-subtle-00);
+    cursor: default;
+    transition: background 70ms;
+  }
+  .skill-item:hover { background: var(--cds-background-hover); }
+  .skill-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  .skill-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--cds-text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .skill-desc {
+    font-size: 12px;
+    color: var(--ibm-gray-50);
+    line-height: 1.4;
+    margin-bottom: 8px;
+  }
+  .skill-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .skill-trigger-info {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--ibm-gray-50);
+  }
 
-  /* Right pane — event emitter */
-  .event-pane { width: 280px; background: white; border-left: 1px solid #e5e7eb; padding: 20px; flex-shrink: 0; overflow-y: auto; }
-  .event-pane.collapsed { width: 40px; padding: 10px; cursor: pointer; writing-mode: vertical-rl; font-size: 12px; color: #94a3b8; }
-  .event-pane h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 16px; }
-  .event-pane label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: #64748b; }
-  .event-pane input, .event-pane textarea { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 8px; font-size: 13px; margin-bottom: 12px; font-family: monospace; }
-  .event-pane textarea { height: 100px; resize: vertical; }
-  .event-pane button { width: 100%; background: #f59e0b; color: white; border: none; border-radius: 6px; padding: 10px; font-size: 13px; cursor: pointer; font-weight: 600; }
-  .event-pane .flash { font-size: 12px; color: #10b981; margin-top: 10px; }
+  /* Trigger tags (plain spans styled like Carbon tags) */
+  .trigger-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    padding: 2px 8px;
+    border-radius: 24px;
+    white-space: nowrap;
+  }
+  .trigger-tag.blue       { background: #d0e2ff; color: #0043ce; }
+  .trigger-tag.green      { background: #defbe6; color: #0e6027; }
+  .trigger-tag.warm-gray  { background: #e0e0e0; color: #393939; }
+
+  .sidenav-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--cds-border-subtle-00);
+  }
+
+  /* ── Main content ─────────────────────────────────────────── */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--cds-background);
+  }
+  .main-toolbar {
+    height: 48px;
+    border-bottom: 1px solid var(--cds-border-subtle-00);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 12px;
+    flex-shrink: 0;
+    background: var(--cds-layer-01);
+  }
+  .main-toolbar h1 {
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ibm-gray-30);
+  }
+  .main-toolbar .spacer { flex: 1; }
+  .content-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .content-area:empty::after {
+    content: "Run a skill to see results here.";
+    color: var(--ibm-gray-70);
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  /* Chat input */
+  .chat-bar {
+    border-top: 1px solid var(--cds-border-subtle-00);
+    background: var(--cds-layer-01);
+    padding: 12px 16px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+  }
+  .chat-bar.visible { display: flex; }
+  .chat-bar input {
+    flex: 1;
+    background: var(--cds-background);
+    border: 1px solid var(--ibm-gray-70);
+    border-bottom: 2px solid var(--ibm-gray-50);
+    color: var(--cds-text-primary);
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px;
+    padding: 10px 16px;
+    outline: none;
+    transition: border-color 70ms;
+  }
+  .chat-bar input::placeholder { color: var(--cds-text-placeholder); }
+  .chat-bar input:focus {
+    border-color: var(--cds-focus);
+    border-bottom-color: var(--cds-focus);
+    outline: 2px solid var(--cds-focus);
+    outline-offset: -2px;
+  }
+
+  /* ── Chat bubbles ─────────────────────────────────────────── */
+  .bubble {
+    max-width: 72%;
+    padding: 10px 16px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .bubble-user {
+    background: var(--ibm-blue-60);
+    color: #ffffff;
+    align-self: flex-end;
+  }
+  .bubble-assistant {
+    background: var(--cds-layer-02);
+    color: var(--cds-text-primary);
+    border-left: 2px solid var(--ibm-gray-70);
+    align-self: flex-start;
+  }
+
+  /* ── Result cards ─────────────────────────────────────────── */
+  .result-card {
+    background: var(--cds-layer-01);
+    border: 1px solid var(--cds-border-subtle-00);
+    border-left: 3px solid var(--ibm-blue-60);
+    padding: 20px 24px;
+  }
+  .result-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .result-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cds-text-primary);
+    line-height: 1.3;
+  }
+  .result-card .skill-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--ibm-gray-50);
+    white-space: nowrap;
+    margin-left: 12px;
+    flex-shrink: 0;
+  }
+  .result-card ul {
+    margin: 0 0 12px 16px;
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--ibm-gray-30);
+  }
+  .result-card .meta {
+    font-size: 11px;
+    color: var(--ibm-gray-70);
+    font-family: 'IBM Plex Mono', monospace;
+    border-top: 1px solid var(--cds-border-subtle-00);
+    padding-top: 8px;
+    margin-top: 4px;
+  }
+
+  /* Approval card */
+  .result-card.approval {
+    border-left-color: var(--cds-support-warning);
+    background: #1c1a00;
+    border-color: #3d3300;
+  }
+  .result-card.approval h3 { color: var(--cds-support-warning); }
+  .action-desc {
+    background: #2a2500;
+    border: 1px solid #3d3300;
+    padding: 10px 14px;
+    margin: 10px 0;
+    font-size: 13px;
+    color: var(--cds-support-warning);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .action-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  /* ── Right pane — event emitter (collapsible) ───────────── */
+  .event-pane {
+    width: 272px;
+    background: var(--cds-layer-01);
+    border-left: 1px solid var(--cds-border-subtle-00);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: width 150ms ease, opacity 150ms ease;
+    overflow: hidden;
+  }
+  .event-pane.collapsed {
+    width: 0;
+    border-left: none;
+  }
+  .event-pane-toggle {
+    position: absolute;
+    right: 0;
+    top: 49px;
+    width: 28px;
+    height: 28px;
+    background: var(--cds-layer-01);
+    border: 1px solid var(--cds-border-subtle-00);
+    border-right: none;
+    color: var(--ibm-gray-50);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    transition: background 70ms;
+  }
+  .event-pane-toggle:hover {
+    background: var(--cds-background-hover);
+    color: var(--cds-text-primary);
+  }
+  .event-pane-header {
+    height: 48px;
+    border-bottom: 1px solid var(--cds-border-subtle-00);
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    min-width: 272px;
+  }
+  .event-pane-header h2 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ibm-gray-30);
+  }
+  .event-pane-body {
+    padding: 16px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 272px;
+  }
+  .form-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ibm-gray-30);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .carbon-input {
+    width: 100%;
+    background: var(--cds-background);
+    border: none;
+    border-bottom: 1px solid var(--ibm-gray-70);
+    color: var(--cds-text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color 70ms;
+  }
+  .carbon-input:focus {
+    border-bottom-color: var(--cds-focus);
+    outline: 2px solid var(--cds-focus);
+    outline-offset: -2px;
+  }
+  textarea.carbon-input {
+    height: 96px;
+    resize: vertical;
+    border: 1px solid var(--ibm-gray-70);
+    border-bottom: 1px solid var(--ibm-gray-70);
+  }
+  .event-flash {
+    font-size: 12px;
+    color: var(--cds-support-success);
+    font-family: 'IBM Plex Mono', monospace;
+    min-height: 16px;
+  }
+
+  /* ── Scrollbar ────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--ibm-gray-70); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--ibm-gray-50); }
 </style>
 </head>
 <body>
 
-<!-- Left: Skills -->
-<div class="sidebar">
-  <h2>Skills</h2>
-  <div id="skills-list"></div>
-  <button onclick="reloadSkills()" style="width:100%;background:#334155;color:#94a3b8;border:1px solid #475569;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;margin-top:10px">Reload Skills</button>
-</div>
+<!-- Shell header -->
+<header class="shell-header">
+  <svg width="20" height="20" viewBox="0 0 32 32" fill="white" xmlns="http://www.w3.org/2000/svg">
+    <path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm0 2c6.627 0 12 5.373 12 12S22.627 28 16 28 4 22.627 4 16 9.373 4 16 4zm-1 4v8.586l-3.293-3.293-1.414 1.414L16 20.414l5.707-5.707-1.414-1.414L17 16.586V8h-2z"/>
+  </svg>
+  <span class="product-name">Solis <span>/ Runtime</span></span>
+  <div class="divider"></div>
+  <span class="env-badge" id="env-badge">...</span>
+  <div class="runtime-status">
+    <div class="status-indicator" id="status-dot"></div>
+    <span id="uptime">Connecting...</span>
+  </div>
+</header>
 
-<!-- Center: Content -->
-<div class="main">
-  <div class="main-header">
-    <div><span class="status-dot"></span><h1 style="display:inline">Solis Runtime</h1></div>
-    <div style="display:flex;align-items:center;gap:14px">
-      <span id="uptime" style="font-size:12px;color:#94a3b8"></span>
-      <button onclick="clearContent()" style="background:#ef4444;color:white;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">Clear</button>
+<!-- Body -->
+<div class="body">
+
+  <!-- Left: Skills nav -->
+  <nav class="sidenav">
+    <div class="sidenav-header">
+      <h2>Skills</h2>
     </div>
-  </div>
-  <div class="content" id="content"></div>
-  <div class="chat-input-area" id="chat-input-area" style="display:none">
-    <input type="text" id="chat-input" placeholder="Send a message to the chat skill..." />
-    <button onclick="sendChat()">Send</button>
-  </div>
-</div>
+    <div class="sidenav-skills" id="skills-list"></div>
+    <div class="sidenav-footer">
+      <cds-button id="reload-btn" kind="ghost" size="sm" style="width:100%" onclick="reloadSkills()">
+        Reload Skills
+      </cds-button>
+    </div>
+  </nav>
 
-<!-- Right: Event Emitter -->
-<div class="event-pane" id="event-pane">
-  <h2>Emit Event</h2>
-  <label>Event Name</label>
-  <input type="text" id="event-name" value="cross_domain_query" />
-  <label>Payload (JSON)</label>
-  <textarea id="event-payload">{}</textarea>
-  <button onclick="fireEvent()">Fire Event</button>
-  <div class="flash" id="event-flash"></div>
+  <!-- Center: Content -->
+  <main class="main">
+    <div class="main-toolbar">
+      <h1>Skill Output</h1>
+      <span class="spacer"></span>
+      <cds-button kind="danger--ghost" size="sm" onclick="clearContent()">Clear</cds-button>
+    </div>
+    <div class="content-area" id="content"></div>
+    <div class="chat-bar" id="chat-bar">
+      <input type="text" id="chat-input" placeholder="Message the chat skill..." autocomplete="off" />
+      <cds-button size="md" onclick="sendChat()">Send</cds-button>
+    </div>
+  </main>
+
+  <!-- Right: Event emitter (collapsed by default) -->
+  <button class="event-pane-toggle" id="event-toggle" onclick="toggleEventPane()" title="Emit Event">&#9664;</button>
+  <aside class="event-pane collapsed" id="event-pane">
+    <div class="event-pane-header">
+      <h2>Emit Event</h2>
+    </div>
+    <div class="event-pane-body">
+      <div>
+        <label class="form-label" for="event-name">Event Name</label>
+        <input class="carbon-input" type="text" id="event-name" value="cross_domain_query" />
+      </div>
+      <div>
+        <label class="form-label" for="event-payload">Payload (JSON)</label>
+        <textarea class="carbon-input" id="event-payload">{}</textarea>
+      </div>
+      <cds-button kind="tertiary" style="width:100%" onclick="fireEvent()">Fire Event</cds-button>
+      <div class="event-flash" id="event-flash"></div>
+    </div>
+  </aside>
+
 </div>
 
 <script>
 const content = document.getElementById("content");
 
-// --- SSE — receives results from scheduled and event-driven skills ---
+// ── SSE ───────────────────────────────────────────────────────
 const evtSource = new EventSource("/events");
 evtSource.addEventListener("skill_result", (e) => {
-  const result = JSON.parse(e.data);
-  renderResult(result);
+  renderResult(JSON.parse(e.data));
 });
+evtSource.onerror = () => {
+  document.getElementById("status-dot").classList.add("offline");
+};
 
-// --- Load skills ---
+// ── Skills ────────────────────────────────────────────────────
 async function loadSkills() {
   const resp = await fetch("/skills");
   const skills = await resp.json();
   const container = document.getElementById("skills-list");
   container.innerHTML = "";
   skills.forEach(s => {
-    const badgeClass = `badge-${s.trigger}`;
+    const tagType = s.trigger === "scheduled" ? "green"
+                  : s.trigger === "event"     ? "warm-gray"
+                  :                             "blue";
     const div = document.createElement("div");
-    div.className = "skill-card";
+    div.className = "skill-item";
     div.innerHTML = `
-      <h3>${s.name}</h3>
-      <p>${s.description}</p>
-      <span class="badge ${badgeClass}">${s.trigger}</span>
-      ${s.trigger_config ? `<span style="font-size:11px;color:#94a3b8;margin-left:6px">${s.trigger_config}</span>` : ""}
-      <br><button onclick="invokeSkill('${s.name}')">Run</button>
+      <div class="skill-item-header">
+        <span class="skill-name">${s.name}</span>
+        <span class="trigger-tag ${tagType}">${s.trigger}</span>
+      </div>
+      <div class="skill-desc">${s.description}</div>
+      <div class="skill-meta">
+        <span class="skill-trigger-info">${s.trigger_config || ""}</span>
+        <cds-button kind="ghost" size="sm" onclick="invokeSkill('${s.name}')">Run</cds-button>
+      </div>
     `;
     container.appendChild(div);
   });
 }
 
-// --- Reload skills from disk ---
 async function reloadSkills() {
-  const btn = document.querySelector('.sidebar button:last-child');
+  const btn = document.getElementById("reload-btn");
   btn.textContent = "Reloading...";
   btn.disabled = true;
   try {
     const resp = await fetch("/reload-skills", { method: "POST" });
     const data = await resp.json();
     await loadSkills();
-    updateUptime();
-    btn.textContent = `Reloaded (${data.skills_loaded} skills, tools: ${data.tools_available ? "yes" : "no"})`;
+    await updateStatus();
+    btn.textContent = `Done — ${data.skills_loaded} skills`;
     setTimeout(() => { btn.textContent = "Reload Skills"; btn.disabled = false; }, 3000);
   } catch {
     btn.textContent = "Reload failed";
@@ -145,39 +583,40 @@ async function reloadSkills() {
   }
 }
 
-// --- Invoke skill ---
+// ── Invoke ────────────────────────────────────────────────────
 let chatActive = false;
 
 async function invokeSkill(name) {
   if (name === "chat") {
-    // "Running" the chat skill activates the chat UI — chat is just a skill
     if (!chatActive) {
       chatActive = true;
-      document.getElementById("chat-input-area").style.display = "flex";
+      document.getElementById("chat-bar").classList.add("visible");
       document.getElementById("chat-input").focus();
     }
     return;
   }
-  const resp = await fetch(`/invoke/${name}`, { method: "POST", headers: {"Content-Type": "application/json"}, body: "{}" });
-  const result = await resp.json();
-  renderResult(result);
+  const resp = await fetch(`/invoke/${name}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  });
+  renderResult(await resp.json());
 }
 
 async function clearContent() {
   content.innerHTML = "";
   chatActive = false;
-  document.getElementById("chat-input-area").style.display = "none";
+  document.getElementById("chat-bar").classList.remove("visible");
   await fetch("/clear", { method: "POST" });
 }
 
-// --- Chat ---
+// ── Chat ──────────────────────────────────────────────────────
 async function sendChat() {
   const input = document.getElementById("chat-input");
   const msg = input.value.trim();
   if (!msg) return;
   input.value = "";
 
-  // User bubble
   const userBubble = document.createElement("div");
   userBubble.className = "bubble bubble-user";
   userBubble.textContent = msg;
@@ -186,12 +625,11 @@ async function sendChat() {
 
   const resp = await fetch("/invoke/chat", {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: msg }),
   });
   const result = await resp.json();
 
-  // Assistant bubble
   const assistBubble = document.createElement("div");
   assistBubble.className = "bubble bubble-assistant";
   assistBubble.innerHTML = simpleMarkdown(result.content?.message || JSON.stringify(result));
@@ -199,38 +637,34 @@ async function sendChat() {
   content.scrollTop = content.scrollHeight;
 }
 
-// Enter key sends chat
 document.getElementById("chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendChat();
 });
 
-// --- Simple markdown rendering for chat bubbles ---
 function simpleMarkdown(text) {
-  let html = text
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") // escape HTML first
-    .replace(/`([^`]+)`/g, "<code>$1</code>")                          // inline code
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")                   // bold
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")                               // italic
-    .replace(/^\d+\.\s+(.+)$/gm, "<li>$1</li>")                        // ordered list items
-    .replace(/^[-*]\s+(.+)$/gm, "<li>$1</li>")                         // unordered list items
-    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")                         // wrap list items
-    .replace(/<\/ul>\s*<ul>/g, "")                                      // merge adjacent lists
-    .replace(/\n{2,}/g, "<br><br>")                                     // paragraph breaks
-    .replace(/\n/g, "<br>");                                            // line breaks
-  return html;
+  return text
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/`([^`]+)`/g, "<code style='font-family:IBM Plex Mono,monospace;font-size:12px;background:rgba(255,255,255,0.08);padding:1px 5px'>$1</code>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/^\d+\.\s+(.+)$/gm, "<li>$1</li>")
+    .replace(/^[-*]\s+(.+)$/gm, "<li>$1</li>")
+    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
+    .replace(/<\/ul>\s*<ul>/g, "")
+    .replace(/\n{2,}/g, "<br><br>")
+    .replace(/\n/g, "<br>");
 }
 
-// --- Render result by ui_type ---
+// ── Render ────────────────────────────────────────────────────
 function renderResult(result) {
-  const uiType = result.ui_type;
-  if (uiType === "chat") {
+  if (result.ui_type === "chat") {
     const bubble = document.createElement("div");
     bubble.className = "bubble bubble-assistant";
-    bubble.textContent = result.content?.message || "";
+    bubble.innerHTML = simpleMarkdown(result.content?.message || "");
     content.appendChild(bubble);
-  } else if (uiType === "card") {
+  } else if (result.ui_type === "card") {
     content.appendChild(makeCard(result));
-  } else if (uiType === "approval") {
+  } else if (result.ui_type === "approval") {
     content.appendChild(makeApprovalCard(result));
   }
   content.scrollTop = content.scrollHeight;
@@ -241,9 +675,12 @@ function makeCard(result) {
   const div = document.createElement("div");
   div.className = "result-card";
   div.innerHTML = `
-    <h3>${c.title || result.skill_name}</h3>
+    <div class="result-card-header">
+      <h3>${c.title || result.skill_name}</h3>
+      <span class="skill-label">${result.skill_name}</span>
+    </div>
     <ul>${(c.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
-    <div class="meta">${result.skill_name} &middot; ${c.timestamp || ""} ${c.sources ? "&middot; " + c.sources.join(", ") : ""}</div>
+    <div class="meta">${c.timestamp || ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
   `;
   return div;
 }
@@ -256,77 +693,87 @@ function makeApprovalCard(result) {
   div.dataset.actionPayload = JSON.stringify(payload);
   div.dataset.skillName = result.skill_name;
   div.innerHTML = `
-    <h3>${c.title || result.skill_name}</h3>
-    <ul>${(c.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
-    ${c.action ? `<div class="action-desc">Recommended action: ${c.action}</div>` : ""}
-    <div class="action-bar">
-      <button class="btn-confirm" onclick="handleApproval('confirm', this)">Confirm</button>
-      <button class="btn-reject" onclick="handleApproval('reject', this)">Reject</button>
+    <div class="result-card-header">
+      <h3>${c.title || result.skill_name}</h3>
+      <span class="skill-label">${result.skill_name}</span>
     </div>
-    <div class="meta">${result.skill_name} &middot; ${c.timestamp || ""} ${c.sources ? "&middot; " + c.sources.join(", ") : ""}</div>
+    <ul>${(c.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
+    ${c.action ? `<div class="action-desc">→ ${c.action}</div>` : ""}
+    <div class="action-bar">
+      <cds-button kind="primary" size="sm" onclick="handleApproval('confirm', this)">Approve</cds-button>
+      <cds-button kind="danger" size="sm" onclick="handleApproval('reject', this)">Reject</cds-button>
+    </div>
+    <div class="meta">${c.timestamp || ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
   `;
   return div;
 }
 
-// Approval buttons — send decision directly to target agent via A2A
 function handleApproval(decision, btn) {
   const card = btn.closest(".result-card");
   const bar = card.querySelector(".action-bar");
   const title = card.querySelector("h3")?.textContent || "";
-  const actionDesc = card.querySelector(".action-desc")?.textContent?.replace("Recommended action: ", "") || "";
+  const actionDesc = card.querySelector(".action-desc")?.textContent?.replace("→ ", "") || "";
   const payload = JSON.parse(card.dataset.actionPayload || "{}");
   const skillName = card.dataset.skillName || "";
-
-  const decisionText = decision === "confirm" ? "confirmed" : "rejected";
-  bar.innerHTML = `<span style="font-size:13px;font-weight:600;color:${decision === "confirm" ? "#10b981" : "#ef4444"}">${decision === "confirm" ? "Approved ✓" : "Rejected ✗"} — sending to agent...</span>`;
-
+  const color = decision === "confirm" ? "var(--cds-support-success)" : "var(--cds-support-error)";
+  const label = decision === "confirm" ? "Approved ✓" : "Rejected ✗";
+  bar.innerHTML = `<span style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:${color}">${label} — sending to agent...</span>`;
   fetch("/action", {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      decision: decisionText,
+      decision: decision === "confirm" ? "confirmed" : "rejected",
       action: payload.description || actionDesc,
       target_agent: payload.target_agent || "",
       skill_name: skillName,
-      title: title,
+      title,
     }),
   }).then(resp => {
-    if (resp.ok) {
-      bar.innerHTML = `<span style="font-size:13px;font-weight:600;color:${decision === "confirm" ? "#10b981" : "#ef4444"}">${decision === "confirm" ? "Approved ✓" : "Rejected ✗"} — logged</span>`;
-    } else {
-      bar.innerHTML = `<span style="font-size:13px;font-weight:600;color:#ef4444">Failed to send to agent</span>`;
-    }
+    bar.innerHTML = `<span style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:${color}">${label} — ${resp.ok ? "logged" : "failed"}</span>`;
   });
 }
 
-// --- Fire event ---
+// ── Fire event ────────────────────────────────────────────────
 async function fireEvent() {
   const name = document.getElementById("event-name").value;
   let payload = {};
   try { payload = JSON.parse(document.getElementById("event-payload").value); } catch {}
   await fetch(`/event/${name}`, {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   const flash = document.getElementById("event-flash");
-  flash.textContent = `Event "${name}" emitted — watch for results.`;
+  flash.textContent = `↑ "${name}" emitted`;
   setTimeout(() => flash.textContent = "", 4000);
 }
 
-// --- Uptime ---
-async function updateUptime() {
+// ── Status ────────────────────────────────────────────────────
+async function updateStatus() {
   try {
     const resp = await fetch("/status");
     const data = await resp.json();
-    document.getElementById("uptime").textContent = `Uptime: ${Math.round(data.uptime_seconds)}s | ${data.skills_loaded} skills`;
-  } catch {}
+    const s = Math.round(data.uptime_seconds);
+    const uptime = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s/60)}m ${s%60}s` : `${Math.floor(s/3600)}h`;
+    document.getElementById("uptime").textContent = `${data.skills_loaded} skills · up ${uptime}`;
+    document.getElementById("env-badge").textContent = data.model || "model unknown";
+    document.getElementById("status-dot").classList.remove("offline");
+  } catch {
+    document.getElementById("status-dot").classList.add("offline");
+    document.getElementById("uptime").textContent = "disconnected";
+  }
 }
 
-// Init
+function toggleEventPane() {
+  const pane = document.getElementById("event-pane");
+  const btn = document.getElementById("event-toggle");
+  pane.classList.toggle("collapsed");
+  btn.innerHTML = pane.classList.contains("collapsed") ? "&#9664;" : "&#9654;";
+}
+
 loadSkills();
-updateUptime();
-setInterval(updateUptime, 10000);
+updateStatus();
+setInterval(updateStatus, 10000);
 </script>
 </body>
 </html>

@@ -13,6 +13,8 @@ Serves on port 5002.
 """
 
 import json
+import logging
+import os
 import random
 from datetime import datetime, timezone
 
@@ -27,15 +29,39 @@ from a2a.utils import new_agent_text_message
 
 _PORT = 5002
 
+wire = logging.getLogger("wire")
+if os.getenv("WIRE_LOG") == "true":
+    logging.basicConfig(level=logging.INFO)
+    wire.setLevel(logging.INFO)
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("\033[35m%(asctime)s [wire:security] %(message)s\033[0m", datefmt="%H:%M:%S"))
+    wire.addHandler(_h)
+    wire.propagate = False
+else:
+    wire.setLevel(logging.WARNING)
+
 # Deliberately "action-worthy" responses so cross-agent synthesis
 # naturally recommends actions, triggering the approval UI.
-_SECURITY_EVENTS = [
+_SECURITY_EVENTS_HIGH = [
     {"type": "alert", "summary": "Unusual data access pattern: user jdoe accessed 3 sensitive tables outside business hours", "severity": "warning"},
     {"type": "compliance", "summary": "GDPR audit scheduled for next week — 2 datasets missing classification labels", "severity": "action_needed"},
     {"type": "alert", "summary": "Failed login attempts spike for service account etl-prod (23 failures in 1 hour)", "severity": "warning"},
     {"type": "compliance", "summary": "3 S3 buckets with PII data lack encryption-at-rest configuration", "severity": "action_needed"},
     {"type": "alert", "summary": "Data exfiltration risk: bulk download of customer records by user msmith flagged", "severity": "critical"},
     {"type": "compliance", "summary": "Quarterly access review overdue for 4 production databases", "severity": "action_needed"},
+    {"type": "alert", "summary": "Privilege escalation detected: user agarcia granted themselves admin on staging cluster", "severity": "critical"},
+    {"type": "compliance", "summary": "SOC 2 control gap: 5 service accounts missing MFA enrollment", "severity": "action_needed"},
+    {"type": "alert", "summary": "Anomalous API call volume from user tpatel — 12x normal rate over 30 minutes", "severity": "warning"},
+    {"type": "alert", "summary": "Unrecognized IP address accessing production database via user kwong credentials", "severity": "critical"},
+    {"type": "compliance", "summary": "Data retention policy violation: 2 datasets past 90-day deletion window", "severity": "action_needed"},
+]
+
+# Low-severity events for the "all clear" scenario (~30% of queries)
+_SECURITY_EVENTS_LOW = [
+    {"type": "info", "summary": "All service account credentials rotated successfully on schedule", "severity": "info"},
+    {"type": "info", "summary": "Weekly vulnerability scan completed — no new findings", "severity": "info"},
+    {"type": "info", "summary": "Firewall rule audit passed — all rules match approved baseline", "severity": "info"},
+    {"type": "info", "summary": "Encryption-at-rest verification completed for all production buckets", "severity": "info"},
 ]
 
 # In-memory audit trail
@@ -44,7 +70,11 @@ _next_id = 1
 
 
 def _do_query(q: str) -> dict:
-    results = random.sample(_SECURITY_EVENTS, k=min(3, len(_SECURITY_EVENTS)))
+    # ~30% of the time, return an all-clear with only info-level events
+    if random.random() < 0.3:
+        results = random.sample(_SECURITY_EVENTS_LOW, k=min(3, len(_SECURITY_EVENTS_LOW)))
+    else:
+        results = random.sample(_SECURITY_EVENTS_HIGH, k=min(3, len(_SECURITY_EVENTS_HIGH)))
     return {
         "agent": "security_agent",
         "domain": "security",
@@ -81,12 +111,16 @@ class SecurityAgentExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         user_input = context.get_user_input() or ""
         query = user_input.lower()
+        wire.info("◀ received: %s", user_input[:150])
 
         # Route to audit logging if the message is about an approval decision
         if any(kw in query for kw in ["confirm", "reject", "approv", "decision", "log action", "audit"]):
             result = _log_action(user_input)
+            wire.info("▶ audit_log → %s", result.get("entry", {}).get("audit_id", "?"))
         else:
             result = _do_query(user_input)
+            severities = [r["severity"] for r in result.get("results", [])]
+            wire.info("▶ query → %d events [%s]", len(result.get("results", [])), ", ".join(severities))
 
         await event_queue.enqueue_event(new_agent_text_message(json.dumps(result)))
 

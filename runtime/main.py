@@ -27,6 +27,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("solis.main")
 
+# Wire logger — clean protocol-level A2A/MCP/LLM traffic for demos.
+# Enable with WIRE_LOG=true in .env
+wire_logger = logging.getLogger("solis.wire")
+if os.getenv("WIRE_LOG") == "true":
+    wire_logger.setLevel(logging.INFO)
+    wire_handler = logging.StreamHandler()
+    wire_handler.setFormatter(logging.Formatter(
+        "\033[36m%(asctime)s [wire] %(message)s\033[0m", datefmt="%H:%M:%S"
+    ))
+    wire_logger.addHandler(wire_handler)
+    wire_logger.propagate = False
+else:
+    wire_logger.setLevel(logging.WARNING)
+
 
 def main():
     skills_dir = Path("skills")
