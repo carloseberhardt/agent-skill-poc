@@ -42,8 +42,9 @@ _FORMAT_INSTRUCTIONS = {
         '- "action_recommended": true or false\n'
         '- "action": if action_recommended is true, a string describing the recommended action. '
         "If false, omit this key.\n"
-        '- "target_agent": if action_recommended is true, the name of the agent tool that should '
-        "handle this action (use the tool name prefix, e.g. 'security-agent'). If false, omit this key.\n"
+        '- "target_agent": if action_recommended is true, the agent that should '
+        "handle this action. Use the short agent name (e.g. 'security-agent' not "
+        "'security-agent_query_security'). If false, omit this key.\n"
         "Do not include any text outside the JSON object."
     ),
     "chat": "\n\nRespond conversationally in plain text. Keep responses concise and helpful.",
@@ -99,8 +100,11 @@ def _build_user_prompt(skill: Skill, context: dict) -> str:
         parts.append(f"User message: {context['input']}")
 
     # Event payload
-    if trigger == "event" and "payload" in context:
-        parts.append(f"Event payload: {json.dumps(context['payload'])}")
+    if trigger == "event":
+        payload = context.get("payload", {})
+        if payload:
+            parts.append(f"Event payload: {json.dumps(payload)}")
+        parts.append("This skill was triggered by an event. Execute your instructions now.")
 
     # Scheduled trigger — just a nudge
     if trigger == "scheduled":

@@ -1,8 +1,7 @@
 """
-Mock cloud cost API — pure MCP tool server.
+Cloud cost API — pure MCP tool server backed by SQLite.
 
-Demonstrates the MCP side of the dual-protocol story:
-A2A for agents that think, MCP for tools that do.
+Returns cost data by service/project/period. Detects anomalies from actual data.
 
 Run: uv run python mock-agents/cost_api.py
 Serves on port 5003.
@@ -10,9 +9,12 @@ Serves on port 5003.
 
 import logging
 import os
-import random
+import sqlite3
 
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+load_dotenv()
 
 mcp = FastMCP("cost-api", host="0.0.0.0", port=5003)
 
@@ -27,136 +29,150 @@ if os.getenv("WIRE_LOG") == "true":
 else:
     wire.setLevel(logging.WARNING)
 
-# Base cost data — randomized at query time
-_BASE_SERVICES = {
-    "Spark": {"current_month": 42000, "previous_month": 10500},
-    "S3": {"current_month": 8200, "previous_month": 7900},
-    "Redshift": {"current_month": 15400, "previous_month": 14800},
-    "Lambda": {"current_month": 3100, "previous_month": 3200},
-    "EKS": {"current_month": 12600, "previous_month": 12100},
-}
-
-# Different anomaly scenarios that rotate each call
-_ANOMALY_SCENARIOS = [
-    {
-        "service": "Spark",
-        "multiplier": 3.5,
-        "project": "Alpha",
-        "note": "Spark costs up ~300% — 3 new jobs created this month",
-    },
-    {
-        "service": "Redshift",
-        "multiplier": 2.8,
-        "project": "Beta",
-        "note": "Redshift costs surged — unoptimized queries from new analytics dashboard",
-    },
-    {
-        "service": "EKS",
-        "multiplier": 3.0,
-        "project": "Alpha",
-        "note": "EKS costs spiked — autoscaler over-provisioned GPU nodes for ML training",
-    },
-    {
-        "service": "Lambda",
-        "multiplier": 4.0,
-        "project": "Gamma",
-        "note": "Lambda invocations exploded — recursive trigger bug in event pipeline",
-    },
-]
+_DB_PATH = os.getenv("DEMO_DB_PATH", "./demo.db")
 
 
-def _generate_cost_data() -> dict:
-    """Build cost data with light randomization and a rotating anomaly."""
-    scenario = random.choice(_ANOMALY_SCENARIOS)
-
-    services = {}
-    for name, base in _BASE_SERVICES.items():
-        # ±15% jitter on base values
-        jitter = random.uniform(0.85, 1.15)
-        current = round(base["current_month"] * jitter)
-        previous = round(base["previous_month"] * jitter)
-
-        # Apply the anomaly multiplier to the chosen service
-        if name == scenario["service"]:
-            current = round(base["previous_month"] * scenario["multiplier"] * jitter)
-
-        change_pct = round((current - previous) / previous * 100, 1) if previous else 0
-        services[name] = {"current_month": current, "previous_month": previous, "change_pct": change_pct}
-
-    # Build project totals from service data
-    projects = {
-        "Alpha": {
-            "total": services["Spark"]["current_month"] + services["EKS"]["current_month"],
-            "top_service": max(["Spark", "EKS"], key=lambda s: services[s]["current_month"]),
-        },
-        "Beta": {
-            "total": services["Redshift"]["current_month"] + services["Lambda"]["current_month"],
-            "top_service": max(["Redshift", "Lambda"], key=lambda s: services[s]["current_month"]),
-        },
-        "Gamma": {
-            "total": services["S3"]["current_month"] + services["Lambda"]["current_month"],
-            "top_service": max(["S3", "Lambda"], key=lambda s: services[s]["current_month"]),
-        },
-    }
-
-    # Attach anomaly note to the affected project
-    projects[scenario["project"]]["note"] = scenario["note"]
-    for pname in projects:
-        if "note" not in projects[pname]:
-            projects[pname]["note"] = "Steady, no anomalies"
-
-    return {"services": services, "projects": projects}
+def _get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 @mcp.tool()
 def get_cost_data(
     service: str | None = None,
     project: str | None = None,
-    period: str = "current_month",
 ) -> dict:
-    """Get cloud infrastructure cost data.
+    """Get cloud infrastructure cost data from the cost database.
 
-    Returns cost breakdowns by service and project, including month-over-month
-    change percentages. Useful for detecting cost anomalies and budget overruns.
+    Returns cost breakdowns by service including spend, budget, month-over-month
+    change, and anomaly flags. Can filter by service or project name.
 
     Args:
-        service: Filter by service name (e.g. "Spark", "S3", "Redshift"). Optional.
-        project: Filter by project name (e.g. "Alpha", "Beta"). Optional.
-        period: Time period — "current_month" or "previous_month". Default: current_month.
+        service: Filter by service name (e.g. "payments-api"). Optional.
+        project: Filter by project/team name (e.g. "Data Platform"). Optional.
     """
-    wire.info("◀ get_cost_data(service=%s, project=%s, period=%s)", service, project, period)
-    cost_data = _generate_cost_data()
-    result = {}
+    wire.info("◀ get_cost_data(service=%s, project=%s)", service, project)
+    conn = _get_db()
+    try:
+        if service:
+            rows = conn.execute(
+                "SELECT * FROM cost_records WHERE service = ? ORDER BY period DESC", (service,)
+            ).fetchall()
+            if not rows:
+                all_services = [r["service"] for r in conn.execute("SELECT DISTINCT service FROM cost_records").fetchall()]
+                return {"error": f"Unknown service: {service}", "available_services": all_services}
+            records = [dict(r) for r in rows]
+            return {"service": service, "records": records}
 
-    if service:
-        svc = cost_data["services"].get(service)
-        if svc:
-            result["service"] = {service: svc}
-        else:
-            result["error"] = f"Unknown service: {service}"
-            result["available_services"] = list(cost_data["services"].keys())
-    elif project:
-        proj = cost_data["projects"].get(project)
-        if proj:
-            result["project"] = {project: proj}
-        else:
-            result["error"] = f"Unknown project: {project}"
-            result["available_projects"] = list(cost_data["projects"].keys())
-    else:
-        result["services"] = cost_data["services"]
-        result["projects"] = cost_data["projects"]
-        result["total_spend"] = sum(
-            s["current_month"] for s in cost_data["services"].values()
-        )
-        result["anomalies"] = [
-            f"{name}: costs up {data['change_pct']}% month-over-month"
-            for name, data in cost_data["services"].items()
-            if abs(data["change_pct"]) > 20
-        ]
+        if project:
+            rows = conn.execute(
+                "SELECT * FROM cost_records WHERE project = ? ORDER BY period DESC", (project,)
+            ).fetchall()
+            if not rows:
+                all_projects = [r["project"] for r in conn.execute("SELECT DISTINCT project FROM cost_records").fetchall()]
+                return {"error": f"Unknown project: {project}", "available_projects": all_projects}
+            records = [dict(r) for r in rows]
+            total_current = sum(r["spend"] for r in records if r["period"] == records[0]["period"])
+            return {"project": project, "records": records, "total_current_spend": total_current}
 
-    anomalies = result.get("anomalies", [])
-    wire.info("▶ cost_data → total=$%s, anomalies=%d", result.get("total_spend", "?"), len(anomalies))
-    return result
+        # All services — current period summary with anomalies
+        # Get the most recent period
+        latest = conn.execute("SELECT MAX(period) as p FROM cost_records").fetchone()["p"]
+        prev_row = conn.execute(
+            "SELECT DISTINCT period FROM cost_records WHERE period < ? ORDER BY period DESC LIMIT 1", (latest,)
+        ).fetchone()
+        prev_period = prev_row["period"] if prev_row else None
+
+        services = {}
+        current_rows = conn.execute(
+            "SELECT * FROM cost_records WHERE period = ?", (latest,)
+        ).fetchall()
+
+        total_spend = 0
+        total_budget = 0
+        anomalies = []
+
+        for row in current_rows:
+            svc = row["service"]
+            spend = row["spend"]
+            budget = row["budget"] or 0
+            total_spend += spend
+            total_budget += budget
+
+            entry = {
+                "spend": spend,
+                "budget": budget,
+                "over_budget": spend > budget if budget else False,
+                "budget_pct": round(spend / budget * 100, 1) if budget else None,
+                "notes": row["notes"],
+            }
+
+            # Get previous period for MoM comparison
+            if prev_period:
+                prev = conn.execute(
+                    "SELECT spend FROM cost_records WHERE service = ? AND period = ?",
+                    (svc, prev_period),
+                ).fetchone()
+                if prev:
+                    change_pct = round((spend - prev["spend"]) / prev["spend"] * 100, 1)
+                    entry["previous_spend"] = prev["spend"]
+                    entry["change_pct"] = change_pct
+                    if abs(change_pct) > 15 or spend > budget:
+                        anomalies.append(
+                            f"{svc}: ${spend:,.0f} (budget ${budget:,.0f}, "
+                            f"{'+' if change_pct > 0 else ''}{change_pct}% MoM)"
+                        )
+
+            services[svc] = entry
+
+        result = {
+            "period": latest,
+            "services": services,
+            "total_spend": total_spend,
+            "total_budget": total_budget,
+            "anomalies": anomalies,
+        }
+        wire.info("▶ cost_data → total=$%s, anomalies=%d", total_spend, len(anomalies))
+        return result
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_budget_status() -> dict:
+    """Get a quick budget vs actual summary for all services.
+
+    Returns each service's current spend relative to budget,
+    flagging any over-budget services. Good for a quick health check.
+    """
+    wire.info("◀ get_budget_status()")
+    conn = _get_db()
+    try:
+        latest = conn.execute("SELECT MAX(period) as p FROM cost_records").fetchone()["p"]
+        rows = conn.execute(
+            "SELECT service, spend, budget, notes FROM cost_records WHERE period = ?", (latest,)
+        ).fetchall()
+
+        statuses = []
+        for row in rows:
+            budget = row["budget"] or 0
+            spend = row["spend"]
+            status = "over" if budget and spend > budget else "ok"
+            statuses.append({
+                "service": row["service"],
+                "spend": spend,
+                "budget": budget,
+                "status": status,
+                "pct_of_budget": round(spend / budget * 100, 1) if budget else None,
+                "notes": row["notes"],
+            })
+
+        over_count = sum(1 for s in statuses if s["status"] == "over")
+        wire.info("▶ budget_status → %d services, %d over budget", len(statuses), over_count)
+        return {"period": latest, "services": statuses, "over_budget_count": over_count}
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

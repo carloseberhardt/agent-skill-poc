@@ -140,11 +140,11 @@ async def emit_event(event_name: str, request: Request):
 
 @app.post("/action")
 async def handle_action(request: Request):
-    """Send an approval decision directly to the target agent via A2A.
+    """Handle an approval decision by routing it through the runtime agent.
 
-    The frontend sends the action_payload + decision. The runtime forwards
-    it as an A2A message to the target agent through the gateway — no LLM
-    in the loop, no event bus, just a direct message.
+    The frontend sends the decision + context. The runtime agent decides
+    how to execute — which agents to call, which tools to use, what to
+    notify. Same path as any other skill execution.
     """
     body = await request.json()
     decision = body.get("decision", "")
@@ -153,63 +153,118 @@ async def handle_action(request: Request):
     skill_name = body.get("skill_name", "")
     title = body.get("title", "")
 
-    if not target_agent:
-        return JSONResponse({"error": "No target_agent specified"}, status_code=400)
-
     from runtime import agent as agent_mod
 
-    # Build a message describing the decision for the target agent
-    message = (
-        f"Log action {decision}: {action}\n"
-        f"Source: {skill_name} — {title}\n"
-        f"Decision: {decision}"
+    # Build a prompt for the runtime agent describing what was approved/rejected
+    prompt = (
+        f"The user has {decision} an action from the {skill_name} skill.\n\n"
+        f"Title: {title}\n"
+        f"Action: {action}\n"
+        f"Suggested target agent: {target_agent}\n"
+        f"Decision: {decision}\n\n"
+    )
+
+    if "confirmed" in decision.lower() or "approved" in decision.lower():
+        prompt += (
+            "Execute this action now using the appropriate agent(s) and tools. "
+            "Send the action to the relevant agent, and use the Discord notification "
+            "tool to post a summary of what was done."
+        )
+    else:
+        prompt += (
+            "The action was rejected. Log this decision. "
+            "No remediation should be taken."
+        )
+
+    system_prompt = (
+        "You are executing an approved action from the Solis runtime. "
+        "Use your available tools and agents to carry out the action. "
+        "Respond with a JSON object containing:\n"
+        '- "title": a short summary of what was done\n'
+        '- "bullets": array of 3-5 bullet points describing actions taken\n'
+        "Do not include any text outside the JSON object."
     )
 
     try:
-        gateway_url = agent_mod._gateway_url
-        agent_url = f"{gateway_url}/{target_agent}"
-        response_text = await agent_mod._call_a2a_agent(agent_url, message)
+        await agent_mod.ensure_initialized()
+        response = await agent_mod.invoke(prompt, system_prompt=system_prompt)
 
-        # Try to extract a clean summary from the agent response
-        agent_summary = response_text
-        try:
-            parsed = json.loads(response_text)
-            if isinstance(parsed, dict):
-                if "entry" in parsed:
-                    entry = parsed["entry"]
-                    agent_summary = f"Audit {entry.get('audit_id', 'logged')} — {entry.get('status', 'recorded')}"
-                elif "action" in parsed:
-                    agent_summary = parsed["action"]
-                else:
-                    agent_summary = parsed.get("status", response_text[:120])
-        except (json.JSONDecodeError, TypeError):
-            agent_summary = response_text[:120]
+        # Parse the response
+        from runtime.skill_executor import _parse_json_response, _strip_code_fences
+        from runtime.skill_loader import Skill, RuntimeConfig
+        dummy_skill = Skill(
+            name="action", description="", instructions="",
+            path=__import__("pathlib").Path("."),
+            runtime_config=RuntimeConfig(ui_type="card"),
+        )
+        content = _parse_json_response(response, dummy_skill)
+        content.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
 
-        # Broadcast a status card so the UI shows confirmation
         result = SkillResult(
-            skill_name=f"action → {target_agent}",
+            skill_name=f"action → {skill_name}",
             ui_type="card",
-            content={
-                "title": f"Action {decision.title()}",
-                "bullets": [
-                    f"Decision: **{decision}**",
-                    f"Action: {action[:200]}",
-                    f"Logged with: {target_agent}",
-                    f"Agent response: {agent_summary}",
-                ],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
+            content=content,
             timestamp=datetime.now(timezone.utc),
         )
         await broadcast_result(result)
         return result.model_dump()
 
     except Exception:
-        logger.exception("Failed to send action to %s", target_agent)
+        logger.exception("Failed to execute action for %s", skill_name)
         return JSONResponse(
-            {"error": f"Could not reach agent '{target_agent}'"},
-            status_code=502,
+            {"error": "Action execution failed"},
+            status_code=500,
         )
+
+
+@app.post("/a2a-callback")
+async def a2a_callback(request: Request):
+    """Receive push notifications from A2A agents.
+
+    Agents POST task state updates here when they detect something noteworthy.
+    The runtime maps the agent source to an event name and emits it on the
+    internal event bus, which triggers any subscribed skills.
+    """
+    body = await request.json()
+    logger.info("A2A callback received: %s", json.dumps(body)[:200])
+
+    # Extract event metadata from the task — agents include this in their response
+    result = body.get("result", body)
+    event_type = None
+    source_agent = None
+
+    # Try to extract from task metadata or artifacts
+    for artifact in result.get("artifacts", []):
+        for part in artifact.get("parts", []):
+            if part.get("type") == "text" or part.get("kind") == "text":
+                try:
+                    parsed = json.loads(part.get("text", ""))
+                    event_type = parsed.get("event_type")
+                    source_agent = parsed.get("source_agent") or parsed.get("agent")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    # Fallback: map agent name to event type
+    if not event_type:
+        agent_map = {
+            "security": "security_alert",
+            "ops": "ops_incident",
+            "data": "data_anomaly",
+        }
+        for key, evt in agent_map.items():
+            if source_agent and key in source_agent.lower():
+                event_type = evt
+                break
+
+    if not event_type:
+        event_type = "agent_notification"
+
+    if _event_bus:
+        payload = {"source_agent": source_agent, "raw": body}
+        await _event_bus.emit(event_type, payload)
+        logger.info("A2A callback → emitted event '%s' from %s", event_type, source_agent)
+
+    return JSONResponse({"status": "received", "event": event_type}, status_code=202)
 
 
 @app.post("/clear")

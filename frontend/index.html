@@ -509,18 +509,15 @@
   <button class="event-pane-toggle" id="event-toggle" onclick="toggleEventPane()" title="Emit Event">&#9664;</button>
   <aside class="event-pane collapsed" id="event-pane">
     <div class="event-pane-header">
-      <h2>Emit Event</h2>
+      <h2>Fire Events</h2>
     </div>
     <div class="event-pane-body">
-      <div>
-        <label class="form-label" for="event-name">Event Name</label>
-        <input class="carbon-input" type="text" id="event-name" value="cross_domain_query" />
+      <div id="event-buttons"></div>
+      <div style="border-top:1px solid var(--cds-border-subtle-00);padding-top:12px;margin-top:4px">
+        <label class="form-label" for="event-name">Custom Event</label>
+        <input class="carbon-input" type="text" id="event-name" placeholder="event_name" />
+        <cds-button kind="ghost" size="sm" style="width:100%;margin-top:8px" onclick="fireEvent()">Fire</cds-button>
       </div>
-      <div>
-        <label class="form-label" for="event-payload">Payload (JSON)</label>
-        <textarea class="carbon-input" id="event-payload">{}</textarea>
-      </div>
-      <cds-button kind="tertiary" style="width:100%" onclick="fireEvent()">Fire Event</cds-button>
       <div class="event-flash" id="event-flash"></div>
     </div>
   </aside>
@@ -564,6 +561,7 @@ async function loadSkills() {
     `;
     container.appendChild(div);
   });
+  buildEventButtons(skills);
 }
 
 async function reloadSkills() {
@@ -680,7 +678,7 @@ function makeCard(result) {
       <span class="skill-label">${result.skill_name}</span>
     </div>
     <ul>${(c.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
-    <div class="meta">${c.timestamp || ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
+    <div class="meta">${c.timestamp || ""}${c.model ? " · model: " + c.model : ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
   `;
   return div;
 }
@@ -703,7 +701,7 @@ function makeApprovalCard(result) {
       <cds-button kind="primary" size="sm" onclick="handleApproval('confirm', this)">Approve</cds-button>
       <cds-button kind="danger" size="sm" onclick="handleApproval('reject', this)">Reject</cds-button>
     </div>
-    <div class="meta">${c.timestamp || ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
+    <div class="meta">${c.timestamp || ""}${c.model ? " · model: " + c.model : ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
   `;
   return div;
 }
@@ -734,18 +732,32 @@ function handleApproval(decision, btn) {
 }
 
 // ── Fire event ────────────────────────────────────────────────
-async function fireEvent() {
-  const name = document.getElementById("event-name").value;
-  let payload = {};
-  try { payload = JSON.parse(document.getElementById("event-payload").value); } catch {}
+async function fireEvent(eventName) {
+  const name = eventName || document.getElementById("event-name").value;
+  if (!name) return;
   await fetch(`/event/${name}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: "{}",
   });
   const flash = document.getElementById("event-flash");
   flash.textContent = `↑ "${name}" emitted`;
   setTimeout(() => flash.textContent = "", 4000);
+}
+
+function buildEventButtons(skills) {
+  const container = document.getElementById("event-buttons");
+  const eventSkills = skills.filter(s => s.trigger === "event" && s.trigger_config);
+  if (!eventSkills.length) {
+    container.innerHTML = '<span style="font-size:12px;color:var(--ibm-gray-50)">No event-driven skills loaded</span>';
+    return;
+  }
+  container.innerHTML = eventSkills.map(s =>
+    `<cds-button kind="tertiary" size="sm" style="width:100%;margin-bottom:6px" onclick="fireEvent('${s.trigger_config}')">
+      ${s.trigger_config}
+      <span style="font-size:10px;color:var(--ibm-gray-50);margin-left:8px">→ ${s.name}</span>
+    </cds-button>`
+  ).join("");
 }
 
 // ── Status ────────────────────────────────────────────────────

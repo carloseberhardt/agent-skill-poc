@@ -1,8 +1,7 @@
 """
-Mock employee directory — pure MCP tool server.
+Employee directory — pure MCP tool server backed by SQLite.
 
-Creates cross-domain connections: security flags "jdoe" -> employee
-lookup resolves who they are, what department, who manages them.
+Resolves user IDs from security alerts, finds managers, lists on-call staff.
 
 Run: uv run python mock-agents/employee_lookup.py
 Serves on port 5004.
@@ -10,8 +9,12 @@ Serves on port 5004.
 
 import logging
 import os
+import sqlite3
 
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+load_dotenv()
 
 mcp = FastMCP("employee-lookup", host="0.0.0.0", port=5004)
 
@@ -26,78 +29,13 @@ if os.getenv("WIRE_LOG") == "true":
 else:
     wire.setLevel(logging.WARNING)
 
-_EMPLOYEES = {
-    "jdoe": {
-        "id": "jdoe",
-        "name": "Jane Doe",
-        "department": "Finance",
-        "role": "Senior Financial Analyst",
-        "manager": "Robert Chen",
-        "location": "New York",
-        "clearance": "confidential",
-        "notes": "Authorized for financial datasets. Recent project: Q1 audit preparation.",
-    },
-    "msmith": {
-        "id": "msmith",
-        "name": "Marcus Smith",
-        "department": "Data Engineering",
-        "role": "Staff Data Engineer",
-        "manager": "Sarah Kim",
-        "location": "Austin",
-        "clearance": "top-secret",
-        "notes": "Lead on customer_360 pipeline. Authorized for bulk data exports.",
-    },
-    "rchen": {
-        "id": "rchen",
-        "name": "Robert Chen",
-        "department": "Finance",
-        "role": "VP of Finance",
-        "manager": "Elena Vasquez",
-        "location": "New York",
-        "clearance": "top-secret",
-        "notes": "Department head. Approver for financial data access requests.",
-    },
-    "skim": {
-        "id": "skim",
-        "name": "Sarah Kim",
-        "department": "Data Engineering",
-        "role": "Director of Data Engineering",
-        "manager": "Elena Vasquez",
-        "location": "Austin",
-        "clearance": "top-secret",
-        "notes": "Manages data platform team. Escalation contact for data incidents.",
-    },
-    "agarcia": {
-        "id": "agarcia",
-        "name": "Ana Garcia",
-        "department": "People Analytics",
-        "role": "HR Data Analyst",
-        "manager": "Robert Chen",
-        "location": "Chicago",
-        "clearance": "confidential",
-        "notes": "Authorized for HR and compensation datasets. Leads quarterly workforce reporting.",
-    },
-    "tpatel": {
-        "id": "tpatel",
-        "name": "Tariq Patel",
-        "department": "Machine Learning",
-        "role": "ML Engineer",
-        "manager": "Sarah Kim",
-        "location": "Seattle",
-        "clearance": "secret",
-        "notes": "Builds and deploys production ML models. Temporary staging write access for model rollout.",
-    },
-    "kwong": {
-        "id": "kwong",
-        "name": "Kevin Wong",
-        "department": "Product",
-        "role": "Product Manager",
-        "manager": "Elena Vasquez",
-        "location": "San Francisco",
-        "clearance": "confidential",
-        "notes": "Cross-functional PM for data products. Recently onboarded to ML model registry.",
-    },
-}
+_DB_PATH = os.getenv("DEMO_DB_PATH", "./demo.db")
+
+
+def _get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 @mcp.tool()
@@ -108,30 +46,68 @@ def lookup_employee(name_or_id: str) -> dict:
     Useful for resolving user IDs from security alerts or access logs.
 
     Args:
-        name_or_id: Employee username (e.g. "jdoe"), ID, or partial name to search for.
+        name_or_id: Employee username (e.g. "jliu"), ID, or partial name to search for.
     """
     wire.info("◀ lookup_employee(%s)", name_or_id)
     key = name_or_id.lower().strip()
 
-    # Direct ID match
-    if key in _EMPLOYEES:
-        emp = _EMPLOYEES[key]
-        wire.info("▶ found → %s (%s, %s)", emp["name"], emp["role"], emp["department"])
-        return emp
+    conn = _get_db()
+    try:
+        # Direct ID match
+        row = conn.execute("SELECT * FROM employees WHERE id = ?", (key,)).fetchone()
+        if row:
+            emp = dict(row)
+            # Resolve manager name
+            if emp.get("manager_id"):
+                mgr = conn.execute("SELECT name FROM employees WHERE id = ?", (emp["manager_id"],)).fetchone()
+                emp["manager_name"] = mgr["name"] if mgr else emp["manager_id"]
+            wire.info("▶ found → %s (%s, %s)", emp["name"], emp["role"], emp["department"])
+            return emp
 
-    # Partial name search
-    matches = [
-        emp for emp in _EMPLOYEES.values()
-        if key in emp["name"].lower() or key in emp["id"].lower()
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    if matches:
-        return {
-            "matches": [{"id": m["id"], "name": m["name"], "department": m["department"]} for m in matches],
-            "note": "Multiple matches found. Use a specific ID to get full details.",
-        }
-    return {"error": f"No employee found matching '{name_or_id}'", "available_ids": list(_EMPLOYEES.keys())}
+        # Partial name/id search
+        rows = conn.execute(
+            "SELECT * FROM employees WHERE LOWER(name) LIKE ? OR LOWER(id) LIKE ?",
+            (f"%{key}%", f"%{key}%"),
+        ).fetchall()
+
+        if len(rows) == 1:
+            emp = dict(rows[0])
+            if emp.get("manager_id"):
+                mgr = conn.execute("SELECT name FROM employees WHERE id = ?", (emp["manager_id"],)).fetchone()
+                emp["manager_name"] = mgr["name"] if mgr else emp["manager_id"]
+            wire.info("▶ found → %s (%s, %s)", emp["name"], emp["role"], emp["department"])
+            return emp
+
+        if rows:
+            matches = [{"id": r["id"], "name": r["name"], "department": r["department"], "role": r["role"]} for r in rows]
+            return {"matches": matches, "note": "Multiple matches found. Use a specific ID for full details."}
+
+        # List available IDs on miss
+        all_ids = [r["id"] for r in conn.execute("SELECT id FROM employees").fetchall()]
+        return {"error": f"No employee found matching '{name_or_id}'", "available_ids": all_ids}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def list_on_call() -> dict:
+    """List all employees currently on call, grouped by role.
+
+    Returns on-call staff with their contact info and role.
+    Useful for incident response — find who to notify.
+    """
+    wire.info("◀ list_on_call()")
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, role, department, on_call_role, email, discord_handle "
+            "FROM employees WHERE on_call_role IS NOT NULL"
+        ).fetchall()
+        result = [dict(r) for r in rows]
+        wire.info("▶ on_call → %d staff", len(result))
+        return {"on_call": result, "count": len(result)}
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
