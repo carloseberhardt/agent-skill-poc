@@ -6,9 +6,8 @@ during a demo produces different agent behavior from the same skills.
 
 Threads (independently toggled):
   Thread 1 — Data exfiltration: suspicious after-hours PII access
-  Thread 2 — Cascading outage: service latency → DB stress → stale pipelines
-  Thread 3 — Normal baseline: always present, healthy services and access
-  Thread 4 — Budget creep: costs climbing with no volume increase
+  Thread 2 — Normal baseline: always present, healthy services and access
+  Thread 3 — Budget creep: costs climbing with no volume increase
 
 Usage:
   uv run python seed_db.py              # random thread selection
@@ -144,23 +143,18 @@ def seed_employees(conn: sqlite3.Connection):
     )
 
 
-def seed_services(conn: sqlite3.Connection, outage: bool):
-    """Service status depends on whether the outage thread is active."""
+def seed_services(conn: sqlite3.Connection):
+    """Services — always healthy in this simplified demo."""
     services = [
-        ("payments-api", "Payments", 1, "psharma",
-         "degraded" if outage else "healthy",
+        ("payments-api", "Payments", 1, "psharma", "healthy",
          "Core payment processing API. Handles all transaction flows."),
-        ("customer-db", "Data Platform", 1, "schen",
-         "stressed" if outage else "healthy",
+        ("customer-db", "Data Platform", 1, "schen", "healthy",
          "Primary customer database. Source of truth for customer records."),
-        ("analytics-pipeline", "Data Platform", 2, "schen",
-         "stale" if outage else "healthy",
+        ("analytics-pipeline", "Data Platform", 2, "schen", "healthy",
          "Hourly ETL pipeline feeding analytics and reporting."),
-        ("auth-service", "Security", 1, "mwebb",
-         "healthy",
+        ("auth-service", "Security", 1, "mwebb", "healthy",
          "Authentication and authorization service. Handles all login flows."),
-        ("reporting-dashboard", "Finance", 3, "jliu",
-         "healthy",
+        ("reporting-dashboard", "Finance", 3, "jliu", "healthy",
          "Internal reporting dashboard for finance and leadership."),
     ]
     conn.executemany(
@@ -169,53 +163,31 @@ def seed_services(conn: sqlite3.Connection, outage: bool):
     )
 
 
-def seed_service_metrics(conn: sqlite3.Connection, outage: bool):
-    """Metrics for all services. Outage thread adds spikes to payments/customer-db/pipeline."""
+def seed_service_metrics(conn: sqlite3.Connection):
+    """Metrics for all services — healthy baseline."""
     rows = []
 
     for hours_ago in range(24, 0, -1):
         ts = (now - timedelta(hours=hours_ago)).isoformat()
 
         # --- payments-api ---
-        if outage and hours_ago <= 2:
-            latency = 800 + (2 - hours_ago) * 200
-            error_rate = 0.08 + (2 - hours_ago) * 0.04
-            requests = 12000
-            notes = "DEGRADED — elevated latency and errors"
-        else:
-            latency = 75 + (hours_ago % 5) * 3
-            error_rate = 0.001
-            requests = 15000
-            notes = None
-        rows.append(("payments-api", ts, latency, error_rate, requests, None, 45.0, notes))
+        latency = 75 + (hours_ago % 5) * 3
+        rows.append(("payments-api", ts, latency, 0.001, 15000, None, 45.0, None))
 
         # --- customer-db ---
-        if outage and hours_ago <= 3:
-            connections = 450 + (3 - hours_ago) * 80
-            db_latency = 120 + (3 - hours_ago) * 60
-            cpu = 88 + (3 - hours_ago) * 4
-            db_notes = "STRESSED — abnormal connection count and CPU"
-        else:
-            connections = 85 + (hours_ago % 8) * 5
-            db_latency = 12 + (hours_ago % 3) * 2
-            cpu = 35 + (hours_ago % 6) * 3
-            db_notes = None
-        rows.append(("customer-db", ts, db_latency, 0.0, None, connections, cpu, db_notes))
+        connections = 85 + (hours_ago % 8) * 5
+        db_latency = 12 + (hours_ago % 3) * 2
+        cpu = 35 + (hours_ago % 6) * 3
+        rows.append(("customer-db", ts, db_latency, 0.0, None, connections, cpu, None))
 
         # --- analytics-pipeline ---
-        if outage and hours_ago <= 6:
-            pipe_error = 1.0 if hours_ago <= 5 else 0.0
-            pipe_notes = "STALE — pipeline failing, last success 6h ago"
-        else:
-            pipe_error = 0.0
-            pipe_notes = None
-        rows.append(("analytics-pipeline", ts, None, pipe_error, None, None, None, pipe_notes))
+        rows.append(("analytics-pipeline", ts, None, 0.0, None, None, None, None))
 
-        # --- auth-service: always healthy ---
+        # --- auth-service ---
         auth_latency = 8 + (hours_ago % 4) * 1.5
         rows.append(("auth-service", ts, auth_latency, 0.0005, 8000, None, 22.0, None))
 
-        # --- reporting-dashboard: always healthy ---
+        # --- reporting-dashboard ---
         if 8 <= (24 - hours_ago) % 24 <= 18:
             dash_requests = 200 + (hours_ago % 6) * 30
             dash_latency = 45 + (hours_ago % 3) * 5
@@ -307,11 +279,8 @@ def seed_security_events(conn: sqlite3.Connection, exfiltration: bool):
     )
 
 
-def seed_datasets(conn: sqlite3.Connection, outage: bool):
-    """Dataset catalog. Outage thread makes analytics-summary stale."""
-    pipeline_status = "stale" if outage else "healthy"
-    last_refresh = (now - timedelta(hours=6)).isoformat() if outage else (now - timedelta(hours=1)).isoformat()
-
+def seed_datasets(conn: sqlite3.Connection):
+    """Dataset catalog — all healthy."""
     datasets = [
         ("customer-pii", "pii", "Data Platform", "healthy",
          (now - timedelta(hours=1)).isoformat(), 1, 2400000,
@@ -325,8 +294,8 @@ def seed_datasets(conn: sqlite3.Connection, outage: bool):
         ("financial-transactions", "confidential", "Finance", "healthy",
          (now - timedelta(hours=2)).isoformat(), 4, 12000000,
          "Financial transaction records. Restricted to finance team and auditors."),
-        ("analytics-summary", "internal", "Data Platform", pipeline_status,
-         last_refresh, 1, 950000,
+        ("analytics-summary", "internal", "Data Platform", "healthy",
+         (now - timedelta(hours=1)).isoformat(), 1, 950000,
          "Pre-computed analytics rollups. Fed by analytics-pipeline."),
         ("hr-directory", "confidential", "HR", "healthy",
          (now - timedelta(hours=12)).isoformat(), 24, 6200,
@@ -407,8 +376,8 @@ def seed_data_access_logs(conn: sqlite3.Connection, exfiltration: bool):
     )
 
 
-def seed_cost_records(conn: sqlite3.Connection, outage: bool, budget_creep: bool):
-    """Cost records. Outage inflates payments-api/customer-db. Budget creep inflates pipeline."""
+def seed_cost_records(conn: sqlite3.Connection, budget_creep: bool):
+    """Cost records. Budget creep inflates analytics-pipeline."""
     rows = []
 
     months = [
@@ -420,16 +389,10 @@ def seed_cost_records(conn: sqlite3.Connection, outage: bool, budget_creep: bool
 
     # payments-api
     payments_budget = 18000
-    if outage:
-        payments_costs = [25200, 17500, 17200, 16800]
-        payments_note = "Over budget — excess compute from retry storms during latency spike"
-    else:
-        payments_costs = [16500, 17500, 17200, 16800]
-        payments_note = None
+    payments_costs = [16500, 17500, 17200, 16800]
     for (month_dt, label), spend in zip(months, payments_costs):
         period = month_dt.strftime("%Y-%m")
-        notes = payments_note if label == "current" else None
-        rows.append(("payments-api", "Payments", period, spend, payments_budget, notes))
+        rows.append(("payments-api", "Payments", period, spend, payments_budget, None))
 
     # analytics-pipeline
     pipeline_budget = 8000
@@ -446,16 +409,10 @@ def seed_cost_records(conn: sqlite3.Connection, outage: bool, budget_creep: bool
 
     # customer-db
     cdb_budget = 12000
-    if outage:
-        cdb_costs = [13800, 11500, 11200, 11000]
-        cdb_note = "Elevated — high connection count driving compute costs"
-    else:
-        cdb_costs = [11200, 11500, 11200, 11000]
-        cdb_note = None
+    cdb_costs = [11200, 11500, 11200, 11000]
     for (month_dt, label), spend in zip(months, cdb_costs):
         period = month_dt.strftime("%Y-%m")
-        notes = cdb_note if label == "current" else None
-        rows.append(("customer-db", "Data Platform", period, spend, cdb_budget, notes))
+        rows.append(("customer-db", "Data Platform", period, spend, cdb_budget, None))
 
     # auth-service — always under budget
     auth_budget = 5000
@@ -489,16 +446,13 @@ def main():
     # Decide which threads are active
     if args.quiet:
         exfiltration = False
-        outage = False
         budget_creep = False
     elif args.all:
         exfiltration = True
-        outage = True
         budget_creep = True
     else:
         # Random selection — each thread independently toggled
         exfiltration = random.random() < 0.5
-        outage = random.random() < 0.5
         budget_creep = random.random() < 0.4
 
     if DB_PATH.exists():
@@ -508,12 +462,12 @@ def main():
     try:
         create_tables(conn)
         seed_employees(conn)
-        seed_services(conn, outage=outage)
-        seed_service_metrics(conn, outage=outage)
+        seed_services(conn)
+        seed_service_metrics(conn)
         seed_security_events(conn, exfiltration=exfiltration)
-        seed_datasets(conn, outage=outage)
+        seed_datasets(conn)
         seed_data_access_logs(conn, exfiltration=exfiltration)
-        seed_cost_records(conn, outage=outage, budget_creep=budget_creep)
+        seed_cost_records(conn, budget_creep=budget_creep)
         conn.commit()
 
         # Print summary
@@ -526,12 +480,8 @@ def main():
 
         print(f"\nActive threads:")
         print(f"  {'✓' if exfiltration else '·'} Data exfiltration (suspicious PII access)")
-        print(f"  {'✓' if outage else '·'} Cascading outage (payments-api → customer-db → pipeline)")
         print(f"  ✓ Normal baseline (always on)")
         print(f"  {'✓' if budget_creep else '·'} Budget creep (analytics-pipeline cost growth)")
-
-        if exfiltration and outage:
-            print(f"\n  ⚡ Cross-thread link active: bulk queries may explain DB stress")
     finally:
         conn.close()
 

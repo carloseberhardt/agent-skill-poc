@@ -355,9 +355,9 @@
     margin-top: 12px;
   }
 
-  /* ── Right pane — event emitter (collapsible) ───────────── */
+  /* ── Right pane — activity feed + event emitter (collapsible) ── */
   .event-pane {
-    width: 272px;
+    width: 300px;
     background: var(--cds-layer-01);
     border-left: 1px solid var(--cds-border-subtle-00);
     display: flex;
@@ -398,7 +398,7 @@
     padding: 0 16px;
     display: flex;
     align-items: center;
-    min-width: 272px;
+    min-width: 300px;
   }
   .event-pane-header h2 {
     font-size: 12px;
@@ -408,12 +408,55 @@
     color: var(--ibm-gray-30);
   }
   .event-pane-body {
-    padding: 16px;
+    padding: 0;
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    min-width: 272px;
+    min-width: 300px;
+    overflow: hidden;
+  }
+
+  /* Activity feed */
+  .activity-feed {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .activity-feed:empty::after {
+    content: "Activity will appear here as the runtime processes events, triggers skills, and calls tools.";
+    color: var(--ibm-gray-70);
+    font-size: 11px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+  .activity-item {
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--ibm-gray-30);
+    padding: 4px 8px;
+    border-left: 2px solid var(--ibm-gray-70);
+    line-height: 1.4;
+  }
+  .activity-item .activity-time {
+    color: var(--ibm-gray-50);
+    margin-right: 6px;
+  }
+  .activity-item.cat-event  { border-left-color: var(--cds-support-warning); }
+  .activity-item.cat-skill  { border-left-color: var(--cds-support-info); }
+  .activity-item.cat-tool   { border-left-color: var(--cds-support-success); }
+  .activity-item.cat-agent  { border-left-color: #be95ff; }
+
+  /* Fire events section at bottom */
+  .fire-events-section {
+    padding: 12px 16px;
+    border-top: 1px solid var(--cds-border-subtle-00);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 300px;
   }
   .form-label {
     font-size: 12px;
@@ -450,6 +493,69 @@
     color: var(--cds-support-success);
     font-family: 'IBM Plex Mono', monospace;
     min-height: 16px;
+  }
+
+  /* Skill definition viewer modal */
+  .skill-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .skill-modal {
+    background: var(--cds-layer-01);
+    border: 1px solid var(--cds-border-subtle-00);
+    width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .skill-modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--cds-border-subtle-00);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .skill-modal-header h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .skill-modal-close {
+    background: none;
+    border: none;
+    color: var(--ibm-gray-50);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  .skill-modal-close:hover { color: var(--cds-text-primary); }
+  .skill-modal-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .skill-modal-body pre {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--ibm-gray-30);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .skill-modal-body .config-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ibm-gray-50);
+    margin-top: 16px;
+    margin-bottom: 4px;
   }
 
   /* ── Scrollbar ────────────────────────────────────────────── */
@@ -505,20 +611,23 @@
     </div>
   </main>
 
-  <!-- Right: Event emitter (collapsed by default) -->
-  <button class="event-pane-toggle" id="event-toggle" onclick="toggleEventPane()" title="Emit Event">&#9664;</button>
-  <aside class="event-pane collapsed" id="event-pane">
+  <!-- Right: Activity feed + event emitter (expanded by default) -->
+  <button class="event-pane-toggle" id="event-toggle" onclick="toggleEventPane()" title="Activity Feed">&#9654;</button>
+  <aside class="event-pane" id="event-pane">
     <div class="event-pane-header">
-      <h2>Fire Events</h2>
+      <h2>Activity</h2>
     </div>
     <div class="event-pane-body">
-      <div id="event-buttons"></div>
-      <div style="border-top:1px solid var(--cds-border-subtle-00);padding-top:12px;margin-top:4px">
-        <label class="form-label" for="event-name">Custom Event</label>
-        <input class="carbon-input" type="text" id="event-name" placeholder="event_name" />
-        <cds-button kind="ghost" size="sm" style="width:100%;margin-top:8px" onclick="fireEvent()">Fire</cds-button>
+      <div class="activity-feed" id="activity-feed"></div>
+      <div class="fire-events-section">
+        <div id="event-buttons"></div>
+        <div>
+          <label class="form-label" for="event-name">Custom Event</label>
+          <input class="carbon-input" type="text" id="event-name" placeholder="event_name" />
+          <cds-button kind="ghost" size="sm" style="width:100%;margin-top:6px" onclick="fireEvent()">Fire</cds-button>
+        </div>
+        <div class="event-flash" id="event-flash"></div>
       </div>
-      <div class="event-flash" id="event-flash"></div>
     </div>
   </aside>
 
@@ -531,6 +640,9 @@ const content = document.getElementById("content");
 const evtSource = new EventSource("/events");
 evtSource.addEventListener("skill_result", (e) => {
   renderResult(JSON.parse(e.data));
+});
+evtSource.addEventListener("activity", (e) => {
+  renderActivity(JSON.parse(e.data));
 });
 evtSource.onerror = () => {
   document.getElementById("status-dot").classList.add("offline");
@@ -556,7 +668,10 @@ async function loadSkills() {
       <div class="skill-desc">${s.description}</div>
       <div class="skill-meta">
         <span class="skill-trigger-info">${s.trigger_config || ""}</span>
-        <cds-button kind="ghost" size="sm" onclick="invokeSkill('${s.name}')">Run</cds-button>
+        <span>
+          <cds-button kind="ghost" size="sm" onclick="viewSkillDef('${s.name}')" title="View definition" style="min-width:0;padding:0 6px">&#123;&#125;</cds-button>
+          <cds-button kind="ghost" size="sm" onclick="invokeSkill('${s.name}')">Run</cds-button>
+        </span>
       </div>
     `;
     container.appendChild(div);
@@ -603,6 +718,7 @@ async function invokeSkill(name) {
 
 async function clearContent() {
   content.innerHTML = "";
+  document.getElementById("activity-feed").innerHTML = "";
   chatActive = false;
   document.getElementById("chat-bar").classList.remove("visible");
   await fetch("/clear", { method: "POST" });
@@ -670,6 +786,7 @@ function renderResult(result) {
 
 function makeCard(result) {
   const c = result.content;
+  const prov = makeProvenance(result);
   const div = document.createElement("div");
   div.className = "result-card";
   div.innerHTML = `
@@ -678,7 +795,7 @@ function makeCard(result) {
       <span class="skill-label">${result.skill_name}</span>
     </div>
     <ul>${(c.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
-    <div class="meta">${c.timestamp || ""}${c.model ? " · model: " + c.model : ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
+    <div class="meta">${prov}${c.timestamp || ""}${c.model ? " · model: " + c.model : ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
   `;
   return div;
 }
@@ -686,6 +803,7 @@ function makeCard(result) {
 function makeApprovalCard(result) {
   const c = result.content;
   const payload = c.action_payload || {};
+  const prov = makeProvenance(result);
   const div = document.createElement("div");
   div.className = "result-card approval";
   div.dataset.actionPayload = JSON.stringify(payload);
@@ -701,9 +819,17 @@ function makeApprovalCard(result) {
       <cds-button kind="primary" size="sm" onclick="handleApproval('confirm', this)">Approve</cds-button>
       <cds-button kind="danger" size="sm" onclick="handleApproval('reject', this)">Reject</cds-button>
     </div>
-    <div class="meta">${c.timestamp || ""}${c.model ? " · model: " + c.model : ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
+    <div class="meta">${prov}${c.timestamp || ""}${c.model ? " · model: " + c.model : ""}${c.sources ? " · " + c.sources.join(", ") : ""}</div>
   `;
   return div;
+}
+
+function makeProvenance(result) {
+  if (!result.trigger_type || result.trigger_type === "manual") return "";
+  const label = result.trigger_type === "event"
+    ? `Triggered by: event ${result.trigger_source || ""}`
+    : `Triggered by: ${result.trigger_type}${result.trigger_source ? " " + result.trigger_source : ""}`;
+  return `<span style="color:var(--cds-support-info);margin-right:8px">${label}</span> · `;
 }
 
 function handleApproval(decision, btn) {
@@ -729,6 +855,22 @@ function handleApproval(decision, btn) {
   }).then(resp => {
     bar.innerHTML = `<span style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:${color}">${label} — ${resp.ok ? "logged" : "failed"}</span>`;
   });
+}
+
+// ── Activity feed ─────────────────────────────────────────────
+const MAX_ACTIVITY = 50;
+function renderActivity(item) {
+  const feed = document.getElementById("activity-feed");
+  const div = document.createElement("div");
+  const cat = item.category || "info";
+  div.className = `activity-item cat-${cat}`;
+  const ts = new Date(item.timestamp);
+  const time = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  div.innerHTML = `<span class="activity-time">${time}</span>${item.message}`;
+  feed.appendChild(div);
+  // Cap at MAX_ACTIVITY items
+  while (feed.children.length > MAX_ACTIVITY) feed.removeChild(feed.firstChild);
+  feed.scrollTop = feed.scrollHeight;
 }
 
 // ── Fire event ────────────────────────────────────────────────
@@ -758,6 +900,31 @@ function buildEventButtons(skills) {
       <span style="font-size:10px;color:var(--ibm-gray-50);margin-left:8px">→ ${s.name}</span>
     </cds-button>`
   ).join("");
+}
+
+// ── Skill definition viewer ───────────────────────────────────
+async function viewSkillDef(name) {
+  const resp = await fetch(`/skills/${name}/definition`);
+  const data = await resp.json();
+  const overlay = document.createElement("div");
+  overlay.className = "skill-modal-overlay";
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const configHtml = data.runtime_config
+    ? `<div class="config-label">runtime.config.json</div><pre>${JSON.stringify(data.runtime_config, null, 2)}</pre>`
+    : "";
+  overlay.innerHTML = `
+    <div class="skill-modal">
+      <div class="skill-modal-header">
+        <h3>${name}/SKILL.md</h3>
+        <button class="skill-modal-close" onclick="this.closest('.skill-modal-overlay').remove()">&times;</button>
+      </div>
+      <div class="skill-modal-body">
+        <pre>${(data.skill_md || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre>
+        ${configHtml}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
 }
 
 // ── Status ────────────────────────────────────────────────────

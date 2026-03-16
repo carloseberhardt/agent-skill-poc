@@ -1,5 +1,5 @@
 # Agent Gateway config — routes A2A agents and MCP tool servers
-# A2A agents: data-agent (5001), security-agent (5002), ops-agent (5006)
+# A2A agents: data-agent (5001), security-agent (5002)
 # MCP servers: cost-api (5003), employee-lookup (5004), discord-notifier (5005)
 
 binds:
@@ -39,22 +39,6 @@ binds:
                   prefix: /
             backends:
               - host: host.docker.internal:5002
-
-          # --- A2A: ops-agent ---
-          - name: ops-agent
-            matches:
-              - path:
-                  pathPrefix: /ops-agent
-            policies:
-              cors:
-                allowOrigins: ["*"]
-                allowHeaders: [content-type, cache-control]
-              a2a: {}
-              urlRewrite:
-                path:
-                  prefix: /
-            backends:
-              - host: host.docker.internal:5006
 
           # --- MCP tool federation ---
           - name: mcp-tools

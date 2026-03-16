@@ -7,8 +7,7 @@ A security event has been detected. Investigate and recommend — do NOT take ac
 
 Step 1 — Gather information:
 1. Ask the security agent for the current threat assessment and details on critical findings.
-2. Ask the data agent about related data access patterns — especially any anomalies involving the same users or resources flagged by security.
-3. Use the employee lookup tool to identify affected users, their roles, departments, and managers.
+2. Use the employee lookup tool to identify affected users, their roles, departments, and managers.
 
 Step 2 — Assess and recommend:
 - If there is a clear security risk (data exfiltration, unauthorized access, unfamiliar IP), recommend a specific action and indicate which agent should handle it.

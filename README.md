@@ -12,22 +12,22 @@ Conversational interaction is one way to work with an agent. It is not the agent
 
 This POC runs skills on a single runtime to make the argument tangible. Skills are **code-free** — each is just a `SKILL.md` (instructions) + `runtime.config.json` (trigger/UI config). The agent uses two protocols through [Agent Gateway](https://agentgateway.dev): **A2A** for domain agents that think, **MCP** for tools that do.
 
-Three domain agents, three tools, three interaction patterns:
+Two domain agents, three tools, three interaction patterns:
 
-- **A2A agents** — Security, Ops/SRE, and Data Platform agents, each running their own LLM model. They reason about their domain, not just return data. The architecture is protocol-native, not model-native.
+- **A2A agents** — Security and Data Platform agents, each running their own LLM model. They reason about their domain, not just return data. The architecture is protocol-native, not model-native.
 - **MCP tools** — Cost API, Employee Lookup, and Discord Notifier. Stateless data retrieval and actions. No LLM needed.
 - **A2A push notifications** — Agents can push events back to the runtime via callbacks, triggering event-driven skills without human input.
 
-All backed by a shared SQLite database with scenario data. Each run of `seed_db.py` randomly activates a different combination of scenario threads — a data exfiltration, a cascading service outage, a slow-burn budget creep, or a quiet day where nothing is wrong. The agents discover whatever story is in the data. Re-seed mid-demo to show the same skills producing different results from different data.
+All backed by a shared SQLite database with scenario data. Each run of `seed_db.py` randomly activates a different combination of scenario threads — a data exfiltration, a slow-burn budget creep, or a quiet day where nothing is wrong. The agents discover whatever story is in the data. Re-seed mid-demo to show the same skills producing different results from different data.
+
+The UI includes a real-time **activity feed** showing events, skill triggers, and tool calls as they happen — making the runtime's cause-and-effect chain visible.
 
 ### Skills
 
 - **Chat** — A conversational skill. Routes questions to agents and tools. Delete the `skills/chat/` directory and the runtime keeps running. Chat was never the product.
-- **Morning Briefing** — Scheduled skill that queries all three agents and cost tools, synthesizes a morning summary. Nobody typed anything.
-- **Cost Report** — Checks budget vs actuals across all services. What it finds depends on the seed data.
-- **Security Escalation** — Event-driven. When the security agent flags something critical, this skill investigates across security + data + employee records and recommends action.
-- **Service Incident Response** — Event-driven. When ops detects service degradation, this skill coordinates ops + data + cost + on-call lookup and recommends remediation.
-- **Incident Correlation** — Event-driven. Correlates signals across all three agents when patterns suggest a connected incident — e.g., unusual data access causing a cascading outage.
+- **Security Escalation** — Event-driven (`security_alert`). Investigates across security + data + employee records and recommends action.
+- **Data Access Review** — Event-driven (`data_anomaly`). Reviews data access anomalies — unusual query patterns, after-hours PII access, bulk extractions.
+- **Incident Correlation** — Event-driven (`incident_correlation`). Correlates signals across security and data agents when patterns suggest a connected incident.
 
 ### Key Architectural Points
 
@@ -35,7 +35,7 @@ All backed by a shared SQLite database with scenario data. Each run of `seed_db.
 
 **Dual protocol: A2A + MCP.** Domain agents speak A2A via `a2a-sdk`. Pure tools speak MCP via `FastMCP`. Agent Gateway routes both. The LangGraph agent sees one unified tool list — the skill doesn't know or care which protocol a tool uses.
 
-**Each agent brings its own model.** The security agent might run GPT-4o, the ops agent Claude Sonnet, the data agent Granite. The runtime doesn't dictate how agents are built — only that they support A2A. This is the protocol-native story.
+**Each agent brings its own model.** The security agent might run GPT-4o, the data agent Granite. The runtime doesn't dictate how agents are built — only that they support A2A. This is the protocol-native story.
 
 **Adding a skill is a "wow" moment.** Create a folder, add two files, click "Reload Skills" in the UI. The new skill appears with a "Run" button. No code, no restart, no new agent registration (skills reuse existing tools).
 
@@ -47,7 +47,7 @@ All backed by a shared SQLite database with scenario data. Each run of `seed_db.
 
 **The model is an environment variable.** The runtime's LLM is accessed through a LiteLLM proxy. Switching models is a one-line `.env` change. Each agent has its own model config.
 
-**Actions have consequences.** When you approve an action (restrict a user's access, scale a service), the agent executes it by writing to the database. The next time any skill runs, the world has changed. The morning briefing after an approval reflects the new state.
+**Actions have consequences.** When you approve an action (restrict a user's access, notify security), the agent executes it through the appropriate agents and tools. The next time any skill runs, the world has changed.
 
 ## How to Run It
 
@@ -100,29 +100,25 @@ uv run python mock-agents/data_agent.py
 # Terminal 5 — A2A: security agent (port 5002)
 uv run python mock-agents/security_agent.py
 
-# Terminal 6 — A2A: ops agent (port 5006)
-uv run python mock-agents/ops_agent.py
-
-# Terminal 7 — runtime (port 8000)
+# Terminal 6 — runtime (port 8000)
 uv run python -m runtime.main
 ```
 
-Open http://localhost:8000. The runtime is running. No chat input is visible — because chat hasn't been activated yet.
+Open http://localhost:8000. The runtime is running with the activity feed visible on the right. No chat input is visible — because chat hasn't been activated yet.
 
 ### Demo Walkthrough
 
-1. **Morning briefing.** Click "Run" next to `morning-briefing`. Agent queries all three domain agents via **A2A** and cost tools via **MCP**, all through Agent Gateway. Card appears with a synthesized summary. In production, this fires at 8am automatically.
-2. **Cost report.** Click "Run" next to `cost-report`. Agent queries cost API via **MCP** and surfaces budget vs actuals across all services.
-3. **Security escalation.** Fire `security_alert` event from the right pane. Agent queries security + data agents via A2A, employee lookup via MCP. Correlates findings and presents an approval card if action is warranted — or an informational card if nothing is wrong.
-4. **Service incident response.** Fire `ops_incident` event. Agent coordinates across ops, data, and cost domains, identifies on-call staff, and recommends remediation.
-5. **Incident correlation.** Fire `incident_correlation` event. Agent queries all three domains looking for connections between security flags, service issues, and data access patterns.
-6. **Approve an action.** Click "Approve" on an approval card. The agent executes the action — restricting access, scaling a service — and the DB changes. Run the morning briefing again to see the updated state.
-7. **Re-seed and re-run.** Run `uv run python seed_db.py` in the terminal. Run the morning briefing again. Different scenario, different findings, same skill. The skill is just instructions — the agents do the reasoning.
-8. **Chat.** Click "Run" next to `chat`. Ask questions — the agent routes to the appropriate agents and tools. Try "Who is on call right now?" or "What's the health of our services?"
-9. **The wow moment.** Create a new skill folder, two files, click Reload. It works.
-10. **The architecture slide.** "Three agents, three models, two protocols. A2A for agents. MCP for tools. Agent Gateway for routing. The skill just says what it wants in English."
+1. **Chat.** Click "Run" next to `chat`. Ask "Who is on call right now?" — watch the activity feed show the tool calls in real-time.
+2. **Security escalation.** Fire `security_alert` event from the right pane. Watch the activity feed: event received → skill triggered → A2A agent call → MCP tool call → result. The approval card shows "Triggered by: event security_alert".
+3. **Data access review.** Fire `data_anomaly` event. A card appears showing the data agent's findings about anomalous access patterns.
+4. **Incident correlation.** Fire `incident_correlation` event. Cross-domain analysis across security and data agents, with employee and cost lookups.
+5. **Approve an action.** Click "Approve" on an approval card. The agent executes the action and posts to Discord. Activity feed shows the entire flow.
+6. **View a skill.** Click the `{}` button next to any skill to see its SKILL.md — "this is all a skill is, a markdown file."
+7. **Re-seed and re-run.** Run `uv run python seed_db.py` in the terminal. Different scenario, different findings, same skills.
+8. **The wow moment.** Create a new skill folder, two files, click Reload. It works.
+9. **The architecture slide.** "Two agents, two models, two protocols. A2A for agents. MCP for tools. Agent Gateway for routing. The skill just says what it wants in English."
 
-Set `DEMO_MODE=true` in `.env` to override scheduled skills to fire every minute — useful for live demos.
+Re-seed the database between demo runs (`uv run python seed_db.py`) to get a different combination of active scenario threads. The `--all` flag activates everything; `--quiet` gives a boring day with no anomalies.
 
 ## What This Is Not
 

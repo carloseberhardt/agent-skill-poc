@@ -11,12 +11,15 @@ changing one env var — no code changes.
 Skills call agent.invoke() — they never import LangChain or LiteLLM directly.
 """
 
+import asyncio
 import json
 import logging
 import os
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -36,6 +39,24 @@ _gateway_mcp_url = os.getenv("AGENT_GATEWAY_MCP_URL", "http://localhost:3000/mcp
 _a2a_agents = [a.strip() for a in os.getenv("AGENT_GATEWAY_A2A_AGENTS", "").split(",") if a.strip()]
 
 _llm = ChatOpenAI(model=_model, base_url=_base_url, api_key=_api_key)
+
+# A2A agent names — used to distinguish agent calls from tool calls in activity feed
+_a2a_tool_names: set[str] = set()
+
+
+class _ActivityCallbackHandler(AsyncCallbackHandler):
+    """Emits activity feed items when tools are called."""
+
+    async def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs: Any) -> None:
+        from runtime.api import broadcast_activity
+        name = serialized.get("name", kwargs.get("name", "unknown"))
+        if name in _a2a_tool_names:
+            await broadcast_activity(f"Agent call: {name}", "agent")
+        else:
+            await broadcast_activity(f"Tool call: {name}", "tool")
+
+
+_activity_callback = _ActivityCallbackHandler()
 
 # Tools and agent are initialized lazily on first invoke.
 _tools: list = []
@@ -195,6 +216,7 @@ async def ensure_initialized() -> None:
         return
     mcp_tools = await _init_mcp_tools()
     a2a_tools = await _init_a2a_tools()
+    _a2a_tool_names.update(t.name for t in a2a_tools)
     _tools = mcp_tools + a2a_tools
     _agent = create_react_agent(_llm, tools=_tools)
     _initialized = True
@@ -208,7 +230,7 @@ async def invoke(prompt: str, system_prompt: str = "") -> str:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
     wire.info("LLM ▶ %s → %s", _model, prompt[:150])
-    result = await _agent.ainvoke({"messages": messages})
+    result = await _agent.ainvoke({"messages": messages}, config={"callbacks": [_activity_callback]})
     response = result["messages"][-1].content
     # Log tool calls from intermediate messages
     for msg in result["messages"]:
@@ -226,8 +248,10 @@ async def refresh_tools() -> None:
     """Re-fetch tools from MCP + A2A. Useful after hot-reloading skills."""
     global _tools, _agent, _initialized
     _initialized = False
+    _a2a_tool_names.clear()
     mcp_tools = await _init_mcp_tools()
     a2a_tools = await _init_a2a_tools()
+    _a2a_tool_names.update(t.name for t in a2a_tools)
     _tools = mcp_tools + a2a_tools
     _agent = create_react_agent(_llm, tools=_tools)
     _initialized = True

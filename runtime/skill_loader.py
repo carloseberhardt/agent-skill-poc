@@ -35,6 +35,8 @@ class SkillResult(BaseModel):
     ui_type: str
     content: dict[str, Any]
     timestamp: datetime
+    trigger_type: str = "manual"
+    trigger_source: str | None = None
 
 
 class Skill(BaseModel):

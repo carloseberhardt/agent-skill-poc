@@ -184,6 +184,10 @@ async def execute_skill(skill: Skill, context: dict) -> SkillResult:
     trace.info("[%s] ▶ SKILL %s (trigger=%s, ui=%s)",
                trace_id, skill.name, trigger, skill.runtime_config.ui_type)
 
+    # Emit activity for skill start
+    from runtime.api import broadcast_activity
+    await broadcast_activity(f"Skill executing: {skill.name} ({trigger})", "skill")
+
     # Ensure agent is initialized (loads MCP tools on first call)
     await agent.ensure_initialized()
 
@@ -282,10 +286,20 @@ async def execute_skill(skill: Skill, context: dict) -> SkillResult:
         content = {"message": response}
 
     trace.info("[%s] ✓ SKILL %s complete → %s", trace_id, skill.name, ui_type)
+    await broadcast_activity(f"Skill complete: {skill.name} → {ui_type}", "skill")
+
+    # Provenance: how/why was this skill triggered?
+    trigger_source = None
+    if trigger == "event":
+        trigger_source = context.get("payload", {}).get("event_name") or skill.runtime_config.trigger_config
+    elif trigger == "chat":
+        trigger_source = "chat skill"
 
     return SkillResult(
         skill_name=skill.name,
         ui_type=ui_type,
         content=content,
         timestamp=now,
+        trigger_type=trigger,
+        trigger_source=trigger_source,
     )

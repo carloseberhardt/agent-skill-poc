@@ -13,7 +13,7 @@ import uvicorn
 from dotenv import load_dotenv
 
 from runtime import api
-from runtime.api import broadcast_result
+from runtime.api import broadcast_activity, broadcast_result
 from runtime.event_bus import EventBus
 from runtime.scheduler import SkillScheduler
 from runtime.skill_loader import load_skills
@@ -52,6 +52,7 @@ def main():
 
     event_bus = EventBus()
     event_bus.set_result_handler(broadcast_result)
+    event_bus.set_activity_handler(broadcast_activity)
 
     scheduler = SkillScheduler(on_result=broadcast_result)
 

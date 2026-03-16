@@ -23,15 +23,21 @@ class EventBus:
     def __init__(self):
         self._subscribers: dict[str, list[Callable]] = defaultdict(list)
         self._on_result: Callable[[SkillResult], Awaitable[None]] | None = None
+        self._on_activity: Callable[[str, str], Awaitable[None]] | None = None
 
     def set_result_handler(self, handler: Callable[[SkillResult], Awaitable[None]]) -> None:
         self._on_result = handler
+
+    def set_activity_handler(self, handler: Callable[[str, str], Awaitable[None]]) -> None:
+        self._on_activity = handler
 
     def subscribe(self, event_name: str, skill: Skill, context_extras: dict | None = None) -> None:
         async def _handler(payload: dict):
             from runtime.skill_executor import execute_skill
 
             logger.info("Event '%s' firing skill: %s", event_name, skill.name)
+            if self._on_activity:
+                await self._on_activity(f"Event '{event_name}' → triggering skill: {skill.name}", "event")
             context = {
                 "skill": skill,
                 "trigger": "event",

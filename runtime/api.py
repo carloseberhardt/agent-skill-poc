@@ -82,10 +82,25 @@ async def broadcast_result(result: SkillResult) -> None:
         _result_history.pop(0)
 
     data = result.model_dump_json()
+    _broadcast_sse("skill_result", data)
+
+
+async def broadcast_activity(message: str, category: str = "info") -> None:
+    """Push an activity feed item to all connected SSE clients."""
+    item = json.dumps({
+        "message": message,
+        "category": category,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    _broadcast_sse("activity", item)
+
+
+def _broadcast_sse(event_type: str, data: str) -> None:
+    """Push an SSE event to all connected clients."""
     dead: list[asyncio.Queue] = []
     for queue in _sse_clients:
         try:
-            queue.put_nowait(data)
+            queue.put_nowait((event_type, data))
         except asyncio.QueueFull:
             dead.append(queue)
     for q in dead:
@@ -107,6 +122,8 @@ async def invoke_skill(skill_name: str, request: Request):
         body = await request.json()
     except Exception:
         pass
+
+    await broadcast_activity(f"Skill invoked: {skill_name}", "skill")
 
     context = {
         "skill": skill,
@@ -134,6 +151,7 @@ async def emit_event(event_name: str, request: Request):
     except Exception:
         pass
 
+    await broadcast_activity(f"Event received: {event_name}", "event")
     await _event_bus.emit(event_name, payload)
     return JSONResponse({"status": "emitted", "event": event_name}, status_code=202)
 
@@ -152,6 +170,8 @@ async def handle_action(request: Request):
     target_agent = body.get("target_agent", "")
     skill_name = body.get("skill_name", "")
     title = body.get("title", "")
+
+    await broadcast_activity(f"Action {decision}: {action or title}", "skill")
 
     from runtime import agent as agent_mod
 
@@ -248,7 +268,6 @@ async def a2a_callback(request: Request):
     if not event_type:
         agent_map = {
             "security": "security_alert",
-            "ops": "ops_incident",
             "data": "data_anomaly",
         }
         for key, evt in agent_map.items():
@@ -297,6 +316,26 @@ async def status():
         "model": os.getenv("LITELLM_MODEL", "unknown"),
         "event_subscriptions": _event_bus.subscriptions if _event_bus else {},
     }
+
+
+@app.get("/skills/{skill_name}/definition")
+async def skill_definition(skill_name: str):
+    """Return the raw SKILL.md content and runtime.config.json for a skill."""
+    skill = _find_skill(skill_name)
+    if not skill:
+        return JSONResponse({"error": f"Skill '{skill_name}' not found"}, status_code=404)
+
+    skill_md = ""
+    config_json = None
+    skill_md_path = skill.path / "SKILL.md"
+    config_path = skill.path / "runtime.config.json"
+
+    if skill_md_path.exists():
+        skill_md = skill_md_path.read_text()
+    if config_path.exists():
+        config_json = json.loads(config_path.read_text())
+
+    return {"skill_md": skill_md, "runtime_config": config_json}
 
 
 @app.post("/reload-skills")
@@ -348,8 +387,12 @@ async def sse_events(request: Request):
                 if await request.is_disconnected():
                     break
                 try:
-                    data = await asyncio.wait_for(queue.get(), timeout=30.0)
-                    yield {"event": "skill_result", "data": data}
+                    item = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if isinstance(item, tuple):
+                        event_type, data = item
+                    else:
+                        event_type, data = "skill_result", item
+                    yield {"event": event_type, "data": data}
                 except asyncio.TimeoutError:
                     yield {"event": "ping", "data": ""}
         finally:

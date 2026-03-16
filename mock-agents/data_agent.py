@@ -1,9 +1,9 @@
 """
 Data platform domain agent — A2A-compliant via a2a-sdk, backed by SQLite + own LLM.
 
-Reasons about data access patterns, pipeline health, dataset classification,
-and anomaly detection. Can execute actions (pause pipelines, revoke dataset access)
-that change the DB state. Uses its own LLM model (DATA_AGENT_MODEL).
+This is a real agentic loop: the LLM has domain-specific tools and decides
+what to query based on the question. It may call multiple tools, reason
+about the results, and call more tools before producing a final answer.
 
 Run: uv run python mock-agents/data_agent.py
 Serves on port 5001.
@@ -20,6 +20,8 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 from a2a.utils import new_agent_text_message
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
 
 from agent_common import get_db, get_llm, get_model_name, setup_wire_logger
 
@@ -31,190 +33,202 @@ llm = get_llm(_MODEL_ENV)
 model_name = get_model_name(_MODEL_ENV)
 
 
-def _query_data_context() -> str:
-    """Pull data platform context from SQLite for the LLM."""
+# ── Domain tools ──────────────────────────────────────────────
+
+@tool
+def get_dataset_inventory() -> str:
+    """List all datasets with their classification, pipeline status, freshness, and row count."""
     conn = get_db()
     try:
-        # Dataset inventory with status
         datasets = conn.execute(
             "SELECT name, classification, owner_team, pipeline_status, last_refresh, "
             "refresh_interval_hours, row_count, description FROM datasets ORDER BY classification DESC"
         ).fetchall()
 
-        # Recent access logs with user details
-        access_logs = conn.execute(
-            "SELECT dal.*, e.name as user_name, e.role, e.department "
-            "FROM data_access_logs dal "
-            "JOIN employees e ON dal.user_id = e.id "
-            "ORDER BY dal.timestamp DESC LIMIT 20"
-        ).fetchall()
-
-        # Access anomalies — users with unusually high row counts
-        anomalies = conn.execute(
-            "SELECT dal.user_id, e.name, e.role, e.department, "
-            "dal.dataset, dal.row_count, dal.timestamp, dal.source_ip "
-            "FROM data_access_logs dal "
-            "JOIN employees e ON dal.user_id = e.id "
-            "WHERE dal.row_count > 5000 "
-            "ORDER BY dal.row_count DESC"
-        ).fetchall()
-
-        lines = ["## Dataset Inventory\n"]
+        lines = []
         for ds in datasets:
-            status = "⚠ STALE" if ds["pipeline_status"] == "stale" else "✓ healthy"
+            status = "STALE" if ds["pipeline_status"] == "stale" else ds["pipeline_status"]
             lines.append(
-                f"- **{ds['name']}** [{ds['classification'].upper()}] — {status}\n"
-                f"  Owner: {ds['owner_team']} | Rows: {ds['row_count']:,} | "
-                f"  Last refresh: {ds['last_refresh']} | Refresh interval: {ds['refresh_interval_hours']}h"
+                f"{ds['name']} [{ds['classification'].upper()}] — {status} | "
+                f"Owner: {ds['owner_team']} | Rows: {ds['row_count']:,} | "
+                f"Last refresh: {ds['last_refresh']} | Interval: {ds['refresh_interval_hours']}h\n"
+                f"  {ds['description']}"
             )
-
-        lines.append("\n## Recent Data Access\n")
-        for a in access_logs:
-            lines.append(
-                f"- {a['user_name']} ({a['department']}) → {a['dataset']} "
-                f"at {a['timestamp']} | {a['row_count']:,} rows | IP: {a['source_ip']}"
-            )
-
-        if anomalies:
-            lines.append("\n## Access Anomalies (high row count)\n")
-            for a in anomalies:
-                lines.append(
-                    f"- **{a['name']}** ({a['role']}, {a['department']}) → {a['dataset']} "
-                    f"| {a['row_count']:,} rows at {a['timestamp']} from IP {a['source_ip']}"
-                )
-
         return "\n".join(lines)
     finally:
         conn.close()
 
 
-def _execute_action(raw_input: str) -> dict:
-    """Execute a data platform action and update the DB."""
-    now = datetime.now(timezone.utc)
+@tool
+def get_recent_access(user_id: str = "", dataset: str = "", limit: int = 20) -> str:
+    """Query recent data access logs. Optionally filter by user_id and/or dataset name."""
     conn = get_db()
-    lower = raw_input.lower()
-
     try:
-        is_rejected = any(kw in lower for kw in ["reject", "denied", "deny"])
-        if is_rejected:
-            return {
-                "action": "rejected",
-                "summary": "Data platform action rejected by operator. No changes made.",
-                "timestamp": now.isoformat(),
-            }
+        query = (
+            "SELECT dal.*, e.name as user_name, e.role, e.department "
+            "FROM data_access_logs dal "
+            "JOIN employees e ON dal.user_id = e.id "
+            "WHERE 1=1"
+        )
+        params = []
+        if user_id:
+            query += " AND dal.user_id = ?"
+            params.append(user_id)
+        if dataset:
+            query += " AND dal.dataset = ?"
+            params.append(dataset)
+        query += " ORDER BY dal.timestamp DESC LIMIT ?"
+        params.append(limit)
 
-        actions_taken = []
+        rows = conn.execute(query, params).fetchall()
+        if not rows:
+            return "No access logs found matching the criteria."
 
-        # Pause/stop a pipeline
-        if "pause" in lower or "stop" in lower:
-            # Find mentioned datasets/pipelines
-            datasets = conn.execute("SELECT name FROM datasets").fetchall()
-            for ds in datasets:
-                if ds["name"] in lower:
-                    conn.execute(
-                        "UPDATE datasets SET pipeline_status = 'paused' WHERE name = ?",
-                        (ds["name"],)
-                    )
-                    actions_taken.append(f"Pipeline paused for dataset {ds['name']}.")
-
-        # Resume/restart a pipeline
-        if "resume" in lower or "restart" in lower or "refresh" in lower:
-            datasets = conn.execute("SELECT name FROM datasets").fetchall()
-            for ds in datasets:
-                if ds["name"] in lower:
-                    conn.execute(
-                        "UPDATE datasets SET pipeline_status = 'healthy', last_refresh = ? "
-                        "WHERE name = ?",
-                        (now.isoformat(), ds["name"])
-                    )
-                    actions_taken.append(f"Pipeline restarted for dataset {ds['name']}. Status: healthy.")
-
-        # Revoke dataset access for a user
-        if "revoke" in lower or "restrict" in lower or "remove access" in lower:
-            user_ids = []
-            for uid in ["jliu", "schen", "mwebb", "psharma", "dtorres", "akim"]:
-                if uid in lower:
-                    user_ids.append(uid)
-            name_map = {"james liu": "jliu", "sarah chen": "schen", "marcus webb": "mwebb",
-                         "priya sharma": "psharma", "dana torres": "dtorres", "alex kim": "akim"}
-            for name, uid in name_map.items():
-                if name in lower and uid not in user_ids:
-                    user_ids.append(uid)
-
-            for uid in user_ids:
-                deleted = conn.execute(
-                    "DELETE FROM data_access_logs WHERE user_id = ? AND row_count > 5000",
-                    (uid,)
-                ).rowcount
-                actions_taken.append(
-                    f"Revoked anomalous data access for {uid}. "
-                    f"Removed {deleted} high-volume access entries."
-                )
-
-        if not actions_taken:
-            actions_taken.append("Action acknowledged and logged. No specific data platform changes identified.")
-
-        conn.commit()
-
-        return {
-            "action": "executed",
-            "actions_taken": actions_taken,
-            "summary": " ".join(actions_taken),
-            "timestamp": now.isoformat(),
-        }
+        lines = []
+        for a in rows:
+            lines.append(
+                f"{a['user_name']} ({a['role']}, {a['department']}) → {a['dataset']} "
+                f"at {a['timestamp']} | {a['row_count']:,} rows | "
+                f"IP: {a['source_ip']} | Duration: {a['duration_ms']}ms"
+            )
+        return "\n".join(lines)
     finally:
         conn.close()
 
 
+@tool
+def get_access_anomalies(min_row_count: int = 5000) -> str:
+    """Find data access entries with unusually high row counts. Helps identify
+    potential exfiltration, runaway queries, or policy violations."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT dal.user_id, e.name, e.role, e.department, "
+            "dal.dataset, dal.row_count, dal.timestamp, dal.source_ip "
+            "FROM data_access_logs dal "
+            "JOIN employees e ON dal.user_id = e.id "
+            "WHERE dal.row_count > ? "
+            "ORDER BY dal.row_count DESC",
+            (min_row_count,),
+        ).fetchall()
+
+        if not rows:
+            return f"No access entries with row count > {min_row_count}. Access patterns appear normal."
+
+        lines = []
+        for a in rows:
+            lines.append(
+                f"{a['name']} ({a['role']}, {a['department']}) → {a['dataset']} "
+                f"| {a['row_count']:,} rows at {a['timestamp']} from IP {a['source_ip']}"
+            )
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def get_employee_info(user_id: str) -> str:
+    """Look up an employee by user ID. Returns role, department, clearance, and notes."""
+    conn = get_db()
+    try:
+        emp = conn.execute("SELECT * FROM employees WHERE id = ?", (user_id,)).fetchone()
+        if not emp:
+            return f"No employee found with ID '{user_id}'."
+        return (
+            f"Name: {emp['name']} | Role: {emp['role']} | Department: {emp['department']} | "
+            f"Team: {emp['team']} | Clearance: {emp['clearance']} | "
+            f"Manager: {emp['manager_id'] or 'none'}\n"
+            f"Notes: {emp['notes']}"
+        )
+    finally:
+        conn.close()
+
+
+@tool
+def pause_pipeline(dataset: str) -> str:
+    """Pause the data pipeline for a specific dataset."""
+    conn = get_db()
+    try:
+        existing = conn.execute("SELECT name, pipeline_status FROM datasets WHERE name = ?", (dataset,)).fetchone()
+        if not existing:
+            return f"Dataset '{dataset}' not found."
+        conn.execute("UPDATE datasets SET pipeline_status = 'paused' WHERE name = ?", (dataset,))
+        conn.commit()
+        return f"Pipeline paused for dataset '{dataset}'. Previous status: {existing['pipeline_status']}."
+    finally:
+        conn.close()
+
+
+@tool
+def revoke_anomalous_access(user_id: str) -> str:
+    """Revoke high-volume data access entries for a user. Removes access log entries
+    with row count > 5000, simulating an access restriction."""
+    conn = get_db()
+    try:
+        deleted = conn.execute(
+            "DELETE FROM data_access_logs WHERE user_id = ? AND row_count > 5000",
+            (user_id,)
+        ).rowcount
+        conn.commit()
+        if deleted == 0:
+            return f"No high-volume access entries found for user '{user_id}'. No changes made."
+        return f"Revoked {deleted} high-volume access entries for user '{user_id}'."
+    finally:
+        conn.close()
+
+
+# ── Agent setup ───────────────────────────────────────────────
+
+_tools = [get_dataset_inventory, get_recent_access, get_access_anomalies,
+          get_employee_info, pause_pipeline, revoke_anomalous_access]
+
+_system_prompt = (
+    f"You are a data platform analysis agent running on model: {model_name}. "
+    "You have tools to inspect datasets, query access logs, find anomalies, "
+    "look up employees, and take remediation actions.\n\n"
+    "Use your tools to investigate before answering. Don't guess — query the data.\n\n"
+    "When analyzing:\n"
+    "- Check dataset health — are any pipelines stale or behind schedule?\n"
+    "- Look at access patterns — volume, timing, user role vs data sensitivity\n"
+    "- If you find anomalies, look up the user to understand if the access fits their role\n"
+    "- Flag potential data quality issues or access policy violations\n\n"
+    "Respond with a JSON object containing:\n"
+    '- "summary": 1-2 sentence overview of data platform health\n'
+    '- "pipeline_status": object mapping dataset names to status\n'
+    '- "access_concerns": array of strings describing any concerning access patterns\n'
+    '- "recommendations": array of actionable recommendations\n'
+    f'- "model": "{model_name}"\n'
+    "Keep it concise and data-driven."
+)
+
+_agent = create_react_agent(llm, tools=_tools)
+
+
+# ── A2A executor ──────────────────────────────────────────────
+
 class DataAgentExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        user_input = context.get_user_input() or "general query"
+        user_input = context.get_user_input() or "Analyze the current state of the data platform."
         wire.info("◀ received: %s", user_input[:150])
 
-        # Route action messages
-        lower = user_input.lower()
-        if any(kw in lower for kw in ["confirm", "reject", "approv", "pause", "stop",
-                                       "resume", "revoke", "restrict access"]):
-            result = _execute_action(user_input)
-            wire.info("▶ action → %s", result.get("summary", "?")[:100])
-            await event_queue.enqueue_event(new_agent_text_message(json.dumps(result)))
-            return
-
-        data_context = _query_data_context()
-
-        system_prompt = (
-            f"You are a data platform analysis agent (model: {model_name}). "
-            "You monitor dataset health, access patterns, and pipeline status. "
-            "You have access to the following data platform telemetry.\n\n"
-            "When analyzing:\n"
-            "- Check pipeline health — are any datasets stale or behind schedule?\n"
-            "- Look for unusual access patterns — volume, timing, user role vs data sensitivity\n"
-            "- Flag potential data quality issues or access policy violations\n"
-            "- Note any correlations between access patterns and pipeline problems\n\n"
-            "Respond with your analysis as a JSON object with these keys:\n"
-            '- "summary": 1-2 sentence overview of data platform health\n'
-            '- "pipeline_status": object mapping dataset names to status ("healthy", "stale", "failing")\n'
-            '- "access_concerns": array of strings describing any concerning access patterns\n'
-            '- "recommendations": array of actionable recommendations\n'
-            '- "model": the model name you are running on\n'
-            "Keep it concise and data-driven."
-        )
-
-        user_prompt = f"Analyze the data platform based on this telemetry:\n\n{data_context}"
-        if user_input and user_input != "general query":
-            user_prompt += f"\n\nSpecific question: {user_input}"
-
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "system", "content": _system_prompt},
+            {"role": "user", "content": user_input},
         ]
 
-        wire.info("▶ calling LLM (%s)", model_name)
-        response = await llm.ainvoke(messages)
-        result_text = response.content
-        wire.info("◀ LLM response (%d chars)", len(result_text))
+        wire.info("▶ starting react loop (%s)", model_name)
+        result = await _agent.ainvoke({"messages": messages})
 
-        await event_queue.enqueue_event(new_agent_text_message(result_text))
+        # Log the tool calls that happened during the loop
+        for msg in result["messages"]:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    wire.info("  ⤷ tool_call: %s(%s)", tc["name"], str(tc.get("args", {}))[:80])
+
+        response = result["messages"][-1].content
+        wire.info("◀ react loop complete (%d chars)", len(response))
+
+        await event_queue.enqueue_event(new_agent_text_message(response))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         pass
@@ -224,12 +238,12 @@ def build_app():
     agent_card = AgentCard(
         name="data_agent",
         description=(
-            f"Data platform domain agent (model: {model_name}). Monitors dataset health, "
-            "pipeline status, and data access patterns. Can execute actions (pause pipelines, "
-            "revoke access) that change data platform state."
+            f"Data platform domain agent (model: {model_name}). Investigates dataset health, "
+            "pipeline status, and data access patterns using its own tools and reasoning. "
+            "Can execute actions (pause pipelines, revoke access)."
         ),
         url=f"http://localhost:{_PORT}",
-        version="0.2.0",
+        version="0.3.0",
         defaultInputModes=["text/plain"],
         defaultOutputModes=["text/plain"],
         capabilities=AgentCapabilities(streaming=False),
@@ -237,23 +251,12 @@ def build_app():
             AgentSkill(
                 id="query_data_platform",
                 name="Query Data Platform",
-                description="Analyze data platform health: dataset freshness, pipeline status, access patterns, and anomalies.",
+                description="Investigate data platform health: dataset freshness, pipeline status, access patterns, and anomalies. Uses tools to query data and reason about findings.",
                 tags=["data", "platform", "pipelines", "access-patterns"],
                 examples=[
                     "What's the health of our data pipelines?",
                     "Any unusual data access patterns?",
                     "Which datasets are stale?",
-                ],
-            ),
-            AgentSkill(
-                id="execute_data_action",
-                name="Execute Data Action",
-                description="Execute a data platform action (pause pipeline, revoke access, restart refresh). Changes dataset and access state.",
-                tags=["data", "action", "pipeline", "access-control"],
-                examples=[
-                    "Pause analytics-pipeline",
-                    "Revoke jliu access to customer-pii",
-                    "Restart analytics-summary refresh",
                 ],
             ),
         ],
