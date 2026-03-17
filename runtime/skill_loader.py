@@ -27,7 +27,7 @@ logger = logging.getLogger("solis.skill_loader")
 class RuntimeConfig(BaseModel):
     trigger: Literal["manual", "scheduled", "event"] = "manual"
     trigger_config: str | None = None
-    ui_type: Literal["chat", "card", "form", "approval", "none"] = "chat"
+    ui_type: Literal["chat", "card", "form", "approval", "none"] = "card"
 
 
 class SkillResult(BaseModel):
