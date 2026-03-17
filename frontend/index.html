@@ -17,26 +17,26 @@
 <script type="module" src="https://esm.sh/@carbon/web-components@2.15.0/es/components/notification/index.js"></script>
 
 <style>
-  /* ── Carbon tokens (subset) ───────────────────────────────── */
+  /* ── Carbon tokens (subset) — White theme ────────────────── */
   :root {
-    --cds-background:           #161616;
-    --cds-background-hover:     #262626;
-    --cds-layer-01:             #262626;
-    --cds-layer-02:             #393939;
-    --cds-layer-accent-01:      #393939;
-    --cds-border-subtle-00:     #393939;
-    --cds-border-subtle-01:     #525252;
-    --cds-text-primary:         #f4f4f4;
-    --cds-text-secondary:       #c6c6c6;
-    --cds-text-placeholder:     #6f6f6f;
-    --cds-text-disabled:        #525252;
-    --cds-interactive:          #4589ff;
-    --cds-focus:                #ffffff;
-    --cds-support-success:      #42be65;
+    --cds-background:           #ffffff;
+    --cds-background-hover:     #e8e8e8;
+    --cds-layer-01:             #f4f4f4;
+    --cds-layer-02:             #e0e0e0;
+    --cds-layer-accent-01:      #e0e0e0;
+    --cds-border-subtle-00:     #e0e0e0;
+    --cds-border-subtle-01:     #c6c6c6;
+    --cds-text-primary:         #161616;
+    --cds-text-secondary:       #525252;
+    --cds-text-placeholder:     #a8a8a8;
+    --cds-text-disabled:        #c6c6c6;
+    --cds-interactive:          #0f62fe;
+    --cds-focus:                #0f62fe;
+    --cds-support-success:      #198038;
     --cds-support-warning:      #f1c21b;
-    --cds-support-error:        #fa4d56;
-    --cds-support-info:         #4589ff;
-    --cds-link-primary:         #78a9ff;
+    --cds-support-error:        #da1e28;
+    --cds-support-info:         #0043ce;
+    --cds-link-primary:         #0f62fe;
     --ibm-blue-60:              #0f62fe;
     --ibm-blue-40:              #78a9ff;
     --ibm-gray-90:              #262626;
@@ -63,8 +63,8 @@
   /* ── Shell header ─────────────────────────────────────────── */
   .shell-header {
     height: 48px;
-    background: #000000;
-    border-bottom: 1px solid var(--ibm-gray-80);
+    background: #ffffff;
+    border-bottom: 2px solid var(--cds-border-subtle-00);
     display: flex;
     align-items: center;
     padding: 0 16px;
@@ -75,25 +75,25 @@
   .shell-header .product-name {
     font-size: 14px;
     font-weight: 400;
-    color: var(--cds-text-primary);
+    color: #161616;
     letter-spacing: 0.1px;
   }
   .shell-header .product-name span {
-    color: var(--ibm-gray-50);
+    color: #6f6f6f;
     font-weight: 300;
   }
   .shell-header .divider {
     width: 1px;
     height: 16px;
-    background: var(--ibm-gray-70);
+    background: var(--cds-border-subtle-01);
   }
   .shell-header .env-badge {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 11px;
-    color: var(--ibm-gray-50);
-    background: var(--ibm-gray-90);
+    color: var(--ibm-gray-70);
+    background: var(--cds-layer-01);
     padding: 2px 8px;
-    border: 1px solid var(--ibm-gray-80);
+    border: 1px solid var(--cds-border-subtle-00);
   }
   .shell-header .runtime-status {
     margin-left: auto;
@@ -101,7 +101,7 @@
     align-items: center;
     gap: 8px;
     font-size: 12px;
-    color: var(--ibm-gray-50);
+    color: var(--ibm-gray-70);
   }
   .status-indicator {
     width: 8px;
@@ -140,7 +140,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--ibm-gray-30);
+    color: var(--cds-text-secondary);
   }
   .sidenav-skills {
     flex: 1;
@@ -224,7 +224,7 @@
   .main-toolbar h1 {
     font-size: 14px;
     font-weight: 400;
-    color: var(--ibm-gray-30);
+    color: var(--cds-text-secondary);
   }
   .main-toolbar .spacer { flex: 1; }
   .content-area {
@@ -237,7 +237,7 @@
   }
   .content-area:empty::after {
     content: "Run a skill to see results here.";
-    color: var(--ibm-gray-70);
+    color: var(--ibm-gray-50);
     font-size: 13px;
     font-style: italic;
   }
@@ -285,9 +285,9 @@
     align-self: flex-end;
   }
   .bubble-assistant {
-    background: var(--cds-layer-02);
+    background: var(--cds-layer-01);
     color: var(--cds-text-primary);
-    border-left: 2px solid var(--ibm-gray-70);
+    border-left: 2px solid var(--cds-border-subtle-01);
     align-self: flex-start;
   }
 
@@ -322,11 +322,11 @@
     margin: 0 0 12px 16px;
     font-size: 13px;
     line-height: 1.8;
-    color: var(--ibm-gray-30);
+    color: var(--cds-text-secondary);
   }
   .result-card .meta {
     font-size: 11px;
-    color: var(--ibm-gray-70);
+    color: var(--ibm-gray-50);
     font-family: 'IBM Plex Mono', monospace;
     border-top: 1px solid var(--cds-border-subtle-00);
     padding-top: 8px;
@@ -336,17 +336,17 @@
   /* Approval card */
   .result-card.approval {
     border-left-color: var(--cds-support-warning);
-    background: #1c1a00;
-    border-color: #3d3300;
+    background: #fdf6dd;
+    border-color: #d4a005;
   }
-  .result-card.approval h3 { color: var(--cds-support-warning); }
+  .result-card.approval h3 { color: #8a6d00; }
   .action-desc {
-    background: #2a2500;
-    border: 1px solid #3d3300;
+    background: #fff8e1;
+    border: 1px solid #d4a005;
     padding: 10px 14px;
     margin: 10px 0;
     font-size: 13px;
-    color: var(--cds-support-warning);
+    color: #6e5600;
     font-family: 'IBM Plex Mono', monospace;
   }
   .action-bar {
@@ -355,7 +355,7 @@
     margin-top: 12px;
   }
 
-  /* ── Right pane — activity feed + event emitter (collapsible) ── */
+  /* ── Right pane — activity feed + timer controls ──────────── */
   .event-pane {
     width: 300px;
     background: var(--cds-layer-01);
@@ -405,7 +405,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--ibm-gray-30);
+    color: var(--cds-text-secondary);
   }
   .event-pane-body {
     padding: 0;
@@ -427,7 +427,7 @@
   }
   .activity-feed:empty::after {
     content: "Activity will appear here as the runtime processes events, triggers skills, and calls tools.";
-    color: var(--ibm-gray-70);
+    color: var(--ibm-gray-50);
     font-size: 11px;
     font-style: italic;
     padding: 8px 0;
@@ -435,10 +435,16 @@
   .activity-item {
     font-size: 11px;
     font-family: 'IBM Plex Mono', monospace;
-    color: var(--ibm-gray-30);
+    color: var(--cds-text-secondary);
     padding: 4px 8px;
     border-left: 2px solid var(--ibm-gray-70);
     line-height: 1.4;
+  }
+  .activity-item.has-detail {
+    cursor: pointer;
+  }
+  .activity-item.has-detail:hover {
+    background: var(--cds-background-hover);
   }
   .activity-item .activity-time {
     color: var(--ibm-gray-50);
@@ -449,50 +455,50 @@
   .activity-item.cat-tool   { border-left-color: var(--cds-support-success); }
   .activity-item.cat-agent  { border-left-color: #be95ff; }
 
-  /* Fire events section at bottom */
-  .fire-events-section {
+  /* Timer controls section */
+  .timer-controls {
     padding: 12px 16px;
     border-top: 1px solid var(--cds-border-subtle-00);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
     min-width: 300px;
   }
-  .form-label {
+  .timer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .timer-label {
     font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--cds-text-secondary);
+  }
+  .timer-state {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 24px;
+  }
+  .timer-state.running { background: #defbe6; color: #0e6027; }
+  .timer-state.paused  { background: #e0e0e0; color: #393939; }
+  .timer-countdown {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 24px;
     font-weight: 500;
-    color: var(--ibm-gray-30);
-    display: block;
-    margin-bottom: 4px;
-  }
-  .carbon-input {
-    width: 100%;
-    background: var(--cds-background);
-    border: none;
-    border-bottom: 1px solid var(--ibm-gray-70);
     color: var(--cds-text-primary);
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    padding: 8px 12px;
-    outline: none;
-    transition: border-color 70ms;
+    text-align: center;
+    padding: 8px 0;
+    letter-spacing: 2px;
   }
-  .carbon-input:focus {
-    border-bottom-color: var(--cds-focus);
-    outline: 2px solid var(--cds-focus);
-    outline-offset: -2px;
+  .timer-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
   }
-  textarea.carbon-input {
-    height: 96px;
-    resize: vertical;
-    border: 1px solid var(--ibm-gray-70);
-    border-bottom: 1px solid var(--ibm-gray-70);
-  }
-  .event-flash {
-    font-size: 12px;
-    color: var(--cds-support-success);
-    font-family: 'IBM Plex Mono', monospace;
-    min-height: 16px;
+  .timer-buttons cds-button {
+    flex: 1;
   }
 
   /* Skill definition viewer modal */
@@ -544,7 +550,7 @@
     font-family: 'IBM Plex Mono', monospace;
     font-size: 12px;
     line-height: 1.6;
-    color: var(--ibm-gray-30);
+    color: var(--cds-text-secondary);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -561,7 +567,7 @@
   /* ── Scrollbar ────────────────────────────────────────────── */
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--ibm-gray-70); }
+  ::-webkit-scrollbar-thumb { background: var(--cds-border-subtle-01); }
   ::-webkit-scrollbar-thumb:hover { background: var(--ibm-gray-50); }
 </style>
 </head>
@@ -569,10 +575,8 @@
 
 <!-- Shell header -->
 <header class="shell-header">
-  <svg width="20" height="20" viewBox="0 0 32 32" fill="white" xmlns="http://www.w3.org/2000/svg">
-    <path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm0 2c6.627 0 12 5.373 12 12S22.627 28 16 28 4 22.627 4 16 9.373 4 16 4zm-1 4v8.586l-3.293-3.293-1.414 1.414L16 20.414l5.707-5.707-1.414-1.414L17 16.586V8h-2z"/>
-  </svg>
-  <span class="product-name">Solis <span>/ Runtime</span></span>
+  <img src="/logo.svg" alt="Solis" style="height:36px;width:auto">
+  <span class="product-name"><span>/ Runtime</span></span>
   <div class="divider"></div>
   <span class="env-badge" id="env-badge">...</span>
   <div class="runtime-status">
@@ -611,7 +615,7 @@
     </div>
   </main>
 
-  <!-- Right: Activity feed + event emitter (expanded by default) -->
+  <!-- Right: Activity feed + timer controls (expanded by default) -->
   <button class="event-pane-toggle" id="event-toggle" onclick="toggleEventPane()" title="Activity Feed">&#9654;</button>
   <aside class="event-pane" id="event-pane">
     <div class="event-pane-header">
@@ -619,14 +623,16 @@
     </div>
     <div class="event-pane-body">
       <div class="activity-feed" id="activity-feed"></div>
-      <div class="fire-events-section">
-        <div id="event-buttons"></div>
-        <div>
-          <label class="form-label" for="event-name">Custom Event</label>
-          <input class="carbon-input" type="text" id="event-name" placeholder="event_name" />
-          <cds-button kind="ghost" size="sm" style="width:100%;margin-top:6px" onclick="fireEvent()">Fire</cds-button>
+      <div class="timer-controls">
+        <div class="timer-header">
+          <span class="timer-label">Monitor Timer</span>
+          <span class="timer-state paused" id="timer-state">paused</span>
         </div>
-        <div class="event-flash" id="event-flash"></div>
+        <div class="timer-countdown" id="timer-countdown">--</div>
+        <div class="timer-buttons">
+          <cds-button kind="primary" size="sm" id="timer-toggle-btn" onclick="toggleTimer()">Start</cds-button>
+          <cds-button kind="tertiary" size="sm" onclick="runNow()">Run Now</cds-button>
+        </div>
       </div>
     </div>
   </aside>
@@ -636,6 +642,11 @@
 <script>
 const content = document.getElementById("content");
 
+// ── Timer state ──────────────────────────────────────────────────
+let timerState = "paused";
+let timerNextTick = null;
+let countdownInterval = null;
+
 // ── SSE ───────────────────────────────────────────────────────
 const evtSource = new EventSource("/events");
 evtSource.addEventListener("skill_result", (e) => {
@@ -644,9 +655,65 @@ evtSource.addEventListener("skill_result", (e) => {
 evtSource.addEventListener("activity", (e) => {
   renderActivity(JSON.parse(e.data));
 });
+evtSource.addEventListener("timer_status", (e) => {
+  const data = JSON.parse(e.data);
+  timerState = data.state;
+  timerNextTick = data.next_tick;
+  updateTimerUI();
+});
 evtSource.onerror = () => {
   document.getElementById("status-dot").classList.add("offline");
 };
+
+// ── Timer controls ───────────────────────────────────────────────
+async function toggleTimer() {
+  const endpoint = timerState === "running" ? "/timer/pause" : "/timer/start";
+  const resp = await fetch(endpoint, { method: "POST" });
+  const data = await resp.json();
+  timerState = data.state;
+  timerNextTick = data.next_tick;
+  updateTimerUI();
+}
+
+async function runNow() {
+  await fetch("/timer/run-now", { method: "POST" });
+}
+
+function updateTimerUI() {
+  const stateEl = document.getElementById("timer-state");
+  const countdownEl = document.getElementById("timer-countdown");
+  const toggleBtn = document.getElementById("timer-toggle-btn");
+
+  stateEl.textContent = timerState;
+  stateEl.className = `timer-state ${timerState}`;
+  toggleBtn.textContent = timerState === "running" ? "Pause" : "Start";
+
+  // Clear existing countdown interval
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+
+  if (timerState === "running" && timerNextTick) {
+    countdownInterval = setInterval(() => {
+      const remaining = Math.max(0, Math.round(timerNextTick - Date.now() / 1000));
+      countdownEl.textContent = remaining + "s";
+      if (remaining <= 0) countdownEl.textContent = "...";
+    }, 250);
+  } else {
+    countdownEl.textContent = "--";
+  }
+}
+
+async function fetchTimerStatus() {
+  try {
+    const resp = await fetch("/timer/status");
+    const data = await resp.json();
+    timerState = data.state;
+    timerNextTick = data.next_tick;
+    updateTimerUI();
+  } catch {}
+}
 
 // ── Skills ────────────────────────────────────────────────────
 async function loadSkills() {
@@ -676,7 +743,6 @@ async function loadSkills() {
     `;
     container.appendChild(div);
   });
-  buildEventButtons(skills);
 }
 
 async function reloadSkills() {
@@ -688,6 +754,7 @@ async function reloadSkills() {
     const data = await resp.json();
     await loadSkills();
     await updateStatus();
+    await fetchTimerStatus();
     btn.textContent = `Done — ${data.skills_loaded} skills`;
     setTimeout(() => { btn.textContent = "Reload Skills"; btn.disabled = false; }, 3000);
   } catch {
@@ -814,7 +881,7 @@ function makeApprovalCard(result) {
       <span class="skill-label">${result.skill_name}</span>
     </div>
     <ul>${(c.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
-    ${c.action ? `<div class="action-desc">→ ${c.action}</div>` : ""}
+    ${c.action ? `<div class="action-desc">&rarr; ${c.action}</div>` : ""}
     <div class="action-bar">
       <cds-button kind="primary" size="sm" onclick="handleApproval('confirm', this)">Approve</cds-button>
       <cds-button kind="danger" size="sm" onclick="handleApproval('reject', this)">Reject</cds-button>
@@ -840,7 +907,7 @@ function handleApproval(decision, btn) {
   const payload = JSON.parse(card.dataset.actionPayload || "{}");
   const skillName = card.dataset.skillName || "";
   const color = decision === "confirm" ? "var(--cds-support-success)" : "var(--cds-support-error)";
-  const label = decision === "confirm" ? "Approved ✓" : "Rejected ✗";
+  const label = decision === "confirm" ? "Approved" : "Rejected";
   bar.innerHTML = `<span style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:${color}">${label} — sending to agent...</span>`;
   fetch("/action", {
     method: "POST",
@@ -867,39 +934,56 @@ function renderActivity(item) {
   const ts = new Date(item.timestamp);
   const time = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   div.innerHTML = `<span class="activity-time">${time}</span>${item.message}`;
+
+  // If this activity has detail (tool call/result), make it clickable
+  if (item.detail) {
+    div.classList.add("has-detail");
+    div.addEventListener("click", () => viewActivityDetail(item));
+  }
+
   feed.appendChild(div);
   // Cap at MAX_ACTIVITY items
   while (feed.children.length > MAX_ACTIVITY) feed.removeChild(feed.firstChild);
   feed.scrollTop = feed.scrollHeight;
 }
 
-// ── Fire event ────────────────────────────────────────────────
-async function fireEvent(eventName) {
-  const name = eventName || document.getElementById("event-name").value;
-  if (!name) return;
-  await fetch(`/event/${name}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  const flash = document.getElementById("event-flash");
-  flash.textContent = `↑ "${name}" emitted`;
-  setTimeout(() => flash.textContent = "", 4000);
-}
+function viewActivityDetail(item) {
+  const d = item.detail;
+  const esc = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
-function buildEventButtons(skills) {
-  const container = document.getElementById("event-buttons");
-  const eventSkills = skills.filter(s => s.trigger === "event" && s.trigger_config);
-  if (!eventSkills.length) {
-    container.innerHTML = '<span style="font-size:12px;color:var(--ibm-gray-50)">No event-driven skills loaded</span>';
-    return;
+  // Try to pretty-print JSON content
+  const formatContent = (raw) => {
+    try {
+      const parsed = JSON.parse(raw);
+      return esc(JSON.stringify(parsed, null, 2));
+    } catch { return esc(raw); }
+  };
+
+  let body = "";
+  if (d.type === "request") {
+    body = `<div class="config-label">Tool</div><pre>${esc(d.tool)}</pre>` +
+           `<div class="config-label">Input</div><pre>${formatContent(d.input)}</pre>`;
+  } else if (d.type === "response") {
+    body = `<div class="config-label">Tool</div><pre>${esc(d.tool)}</pre>` +
+           `<div class="config-label">Input</div><pre>${formatContent(d.input)}</pre>` +
+           `<div class="config-label">Output</div><pre>${formatContent(d.output)}</pre>`;
+  } else {
+    body = `<pre>${formatContent(JSON.stringify(d))}</pre>`;
   }
-  container.innerHTML = eventSkills.map(s =>
-    `<cds-button kind="tertiary" size="sm" style="width:100%;margin-bottom:6px" onclick="fireEvent('${s.trigger_config}')">
-      ${s.trigger_config}
-      <span style="font-size:10px;color:var(--ibm-gray-50);margin-left:8px">→ ${s.name}</span>
-    </cds-button>`
-  ).join("");
+
+  const overlay = document.createElement("div");
+  overlay.className = "skill-modal-overlay";
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="skill-modal">
+      <div class="skill-modal-header">
+        <h3>${esc(item.message)}</h3>
+        <button class="skill-modal-close" onclick="this.closest('.skill-modal-overlay').remove()">&times;</button>
+      </div>
+      <div class="skill-modal-body">${body}</div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
 }
 
 // ── Skill definition viewer ───────────────────────────────────
@@ -952,6 +1036,7 @@ function toggleEventPane() {
 
 loadSkills();
 updateStatus();
+fetchTimerStatus();
 setInterval(updateStatus, 10000);
 </script>
 </body>

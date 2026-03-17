@@ -45,18 +45,76 @@ _a2a_tool_names: set[str] = set()
 
 
 class _ActivityCallbackHandler(AsyncCallbackHandler):
-    """Emits activity feed items when tools are called."""
+    """Emits activity feed items when tools are called, with request/response detail."""
+
+    def __init__(self, skill_name: str = ""):
+        super().__init__()
+        self.skill_name = skill_name
+        # Map run_id → (tool_name, input_args) so on_tool_end can pair them
+        self._pending: dict[str, tuple[str, str]] = {}
 
     async def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs: Any) -> None:
         from runtime.api import broadcast_activity
         name = serialized.get("name", kwargs.get("name", "unknown"))
-        if name in _a2a_tool_names:
-            await broadcast_activity(f"Agent call: {name}", "agent")
+        prefix = f"[{self.skill_name}] " if self.skill_name else ""
+        category = "agent" if name in _a2a_tool_names else "tool"
+        label = "Agent call" if category == "agent" else "Tool call"
+
+        # Use clean tool inputs dict if available, fall back to input_str
+        inputs = kwargs.get("inputs")
+        if isinstance(inputs, dict):
+            clean_input = json.dumps(inputs)
         else:
-            await broadcast_activity(f"Tool call: {name}", "tool")
+            clean_input = str(inputs or input_str)[:4000]
 
+        # Store input for pairing with result
+        run_id = str(kwargs.get("run_id", ""))
+        self._pending[run_id] = (name, clean_input)
 
-_activity_callback = _ActivityCallbackHandler()
+        await broadcast_activity(f"{prefix}{label}: {name}", category,
+                                 detail={"type": "request", "tool": name, "input": clean_input})
+
+    async def on_tool_end(self, output: Any, **kwargs: Any) -> None:
+        from runtime.api import broadcast_activity
+
+        # Try to get tool name from the output object or pending map
+        run_id = str(kwargs.get("run_id", ""))
+        tool_name = getattr(output, "name", None) or ""
+        input_args = ""
+
+        # Try matching by run_id first
+        if run_id in self._pending:
+            tool_name, input_args = self._pending.pop(run_id)
+        elif tool_name:
+            # Match by tool name if run_id didn't work
+            for rid, (pname, pinput) in list(self._pending.items()):
+                if pname == tool_name:
+                    input_args = pinput
+                    del self._pending[rid]
+                    break
+
+        if not tool_name:
+            tool_name = "unknown"
+
+        prefix = f"[{self.skill_name}] " if self.skill_name else ""
+        category = "agent" if tool_name in _a2a_tool_names else "tool"
+        label = "Agent result" if category == "agent" else "Tool result"
+
+        # Extract clean text content from the output
+        if hasattr(output, "content"):
+            content = output.content
+            if isinstance(content, list):
+                # Extract text parts from content blocks
+                texts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
+                output_str = "\n".join(t for t in texts if t)
+            else:
+                output_str = str(content)
+        else:
+            output_str = str(output)
+
+        await broadcast_activity(f"{prefix}{label}: {tool_name}", category,
+                                 detail={"type": "response", "tool": tool_name,
+                                         "input": input_args, "output": output_str[:8000]})
 
 # Tools and agent are initialized lazily on first invoke.
 _tools: list = []
@@ -223,14 +281,38 @@ async def ensure_initialized() -> None:
     logger.info("Agent initialized: %d MCP tools, %d A2A tools", len(mcp_tools), len(a2a_tools))
 
 
-async def invoke(prompt: str, system_prompt: str = "") -> str:
+_MAX_RETRIES = 2
+
+
+async def invoke(prompt: str, system_prompt: str = "", skill_name: str = "") -> str:
     await ensure_initialized()
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
     wire.info("LLM ▶ %s → %s", _model, prompt[:150])
-    result = await _agent.ainvoke({"messages": messages}, config={"callbacks": [_activity_callback]})
+    callback = _ActivityCallbackHandler(skill_name=skill_name)
+
+    last_err = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = await _agent.ainvoke({"messages": messages}, config={"callbacks": [callback]})
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < _MAX_RETRIES and "BadRequestError" in type(e).__name__:
+                logger.warning("Agent call failed (attempt %d/%d), retrying: %s",
+                               attempt + 1, _MAX_RETRIES + 1, str(e)[:200])
+                from runtime.api import broadcast_activity
+                await broadcast_activity(
+                    f"{'[' + skill_name + '] ' if skill_name else ''}Retrying after model error (attempt {attempt + 2})",
+                    "info",
+                )
+                continue
+            raise
+    else:
+        raise last_err
+
     response = result["messages"][-1].content
     # Log tool calls from intermediate messages
     for msg in result["messages"]:

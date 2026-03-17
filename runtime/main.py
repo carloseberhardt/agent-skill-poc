@@ -54,7 +54,10 @@ def main():
     event_bus.set_result_handler(broadcast_result)
     event_bus.set_activity_handler(broadcast_activity)
 
-    scheduler = SkillScheduler(on_result=broadcast_result)
+    scheduler = SkillScheduler(
+        on_result=broadcast_result,
+        on_activity=broadcast_activity,
+    )
 
     # Context extras passed into every skill handler
     context_extras = {"event_bus": event_bus}
@@ -62,11 +65,7 @@ def main():
     for skill in skills:
         trigger = skill.runtime_config.trigger
         if trigger == "scheduled":
-            # In demo mode, override long cron schedules to fire every minute
-            if os.getenv("DEMO_MODE") == "true" and skill.runtime_config.trigger_config:
-                logger.info("DEMO_MODE: overriding %s schedule to every minute", skill.name)
-                skill.runtime_config.trigger_config = "* * * * *"
-            scheduler.register(skill, context_extras=context_extras)
+            scheduler.register_monitor(skill, context_extras=context_extras)
         elif trigger == "event":
             event_name = skill.runtime_config.trigger_config
             if event_name:
@@ -74,8 +73,9 @@ def main():
 
     api.init(skills, scheduler, event_bus)
 
-    # Scheduler starts in the FastAPI lifespan hook (needs a running event loop)
+    # Timer starts paused — user unpauses from the UI when ready
     logger.info("Runtime ready — %d skill(s) loaded", len(skills))
+    logger.info("Monitor timer starts PAUSED — use the UI or POST /timer/start to begin")
     logger.info("API + UI at http://localhost:8000")
     logger.info("API docs at http://localhost:8000/docs")
 

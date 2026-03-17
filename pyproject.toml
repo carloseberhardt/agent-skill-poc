@@ -7,7 +7,6 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "pydantic>=2.0",
-    "apscheduler>=3.10,<4",
     "langchain-openai",
     "langgraph",
     "python-dotenv",

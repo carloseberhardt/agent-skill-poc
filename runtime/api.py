@@ -8,6 +8,10 @@ Endpoints:
   GET  /status               — Runtime health and uptime
   GET  /events               — SSE stream of skill results
   POST /reload-skills        — Hot-reload skills from disk
+  POST /timer/start          — Unpause the monitor timer
+  POST /timer/pause          — Pause the monitor timer
+  POST /timer/run-now        — Trigger one monitor tick immediately
+  GET  /timer/status         — Current timer state
 """
 
 import asyncio
@@ -35,10 +39,8 @@ logger = logging.getLogger("solis.api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Start the scheduler once the event loop is running."""
-    if _scheduler:
-        _scheduler.start()
-        logger.info("Scheduler started")
+    """Timer starts paused — no auto-start."""
+    logger.info("Runtime started (monitor timer paused)")
     yield
     if _scheduler:
         _scheduler.shutdown()
@@ -69,6 +71,8 @@ def init(skills: list[Skill], scheduler: SkillScheduler, event_bus: EventBus) ->
     _scheduler = scheduler
     _event_bus = event_bus
     _start_time = time.time()
+    # Wire state-change callback to broadcast timer status via SSE
+    scheduler._on_state_change = _broadcast_timer_status
 
 
 def get_result_history() -> list[SkillResult]:
@@ -85,14 +89,16 @@ async def broadcast_result(result: SkillResult) -> None:
     _broadcast_sse("skill_result", data)
 
 
-async def broadcast_activity(message: str, category: str = "info") -> None:
+async def broadcast_activity(message: str, category: str = "info", detail: dict | None = None) -> None:
     """Push an activity feed item to all connected SSE clients."""
-    item = json.dumps({
+    payload = {
         "message": message,
         "category": category,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    _broadcast_sse("activity", item)
+    }
+    if detail:
+        payload["detail"] = detail
+    _broadcast_sse("activity", json.dumps(payload))
 
 
 def _broadcast_sse(event_type: str, data: str) -> None:
@@ -105,6 +111,13 @@ def _broadcast_sse(event_type: str, data: str) -> None:
             dead.append(queue)
     for q in dead:
         _sse_clients.discard(q)
+
+
+def _broadcast_timer_status() -> None:
+    """Push current timer status to all SSE clients."""
+    if _scheduler:
+        data = json.dumps(_scheduler.status)
+        _broadcast_sse("timer_status", data)
 
 
 def _find_skill(name: str) -> Skill | None:
@@ -180,15 +193,14 @@ async def handle_action(request: Request):
         f"The user has {decision} an action from the {skill_name} skill.\n\n"
         f"Title: {title}\n"
         f"Action: {action}\n"
-        f"Suggested target agent: {target_agent}\n"
         f"Decision: {decision}\n\n"
     )
 
     if "confirmed" in decision.lower() or "approved" in decision.lower():
         prompt += (
-            "Execute this action now using the appropriate agent(s) and tools. "
-            "Send the action to the relevant agent, and use the Discord notification "
-            "tool to post a summary of what was done."
+            "Execute this action now using your available tools and agents. "
+            "Use as many agents and tools as needed to fully carry out the action. "
+            "After executing, use the Discord notification tool to post a summary of what was done."
         )
     else:
         prompt += (
@@ -198,7 +210,12 @@ async def handle_action(request: Request):
 
     system_prompt = (
         "You are executing an approved action from the Solis runtime. "
-        "Use your available tools and agents to carry out the action. "
+        "You MUST actually call your tools to carry out the action — do not "
+        "claim to have done something without making the tool call. "
+        "If the action requires an agent, send the request to that agent. "
+        "If a tool call fails, report the failure honestly.\n\n"
+        "Only include facts that came directly from your tool call results. "
+        "Do not fabricate confirmation messages or invent details.\n\n"
         "Respond with a JSON object containing:\n"
         '- "title": a short summary of what was done\n'
         '- "bullets": array of 3-5 bullet points describing actions taken\n'
@@ -207,7 +224,7 @@ async def handle_action(request: Request):
 
     try:
         await agent_mod.ensure_initialized()
-        response = await agent_mod.invoke(prompt, system_prompt=system_prompt)
+        response = await agent_mod.invoke(prompt, system_prompt=system_prompt, skill_name=f"action:{skill_name}")
 
         # Parse the response
         from runtime.skill_executor import _parse_json_response, _strip_code_fences
@@ -307,14 +324,51 @@ async def list_skills():
     ]
 
 
+# ── Timer endpoints ───────────────────────────────────────────────
+
+@app.post("/timer/start")
+async def timer_start():
+    if not _scheduler:
+        return JSONResponse({"error": "Scheduler not initialized"}, status_code=500)
+    _scheduler.start()
+    return _scheduler.status
+
+
+@app.post("/timer/pause")
+async def timer_pause():
+    if not _scheduler:
+        return JSONResponse({"error": "Scheduler not initialized"}, status_code=500)
+    _scheduler.pause()
+    return _scheduler.status
+
+
+@app.post("/timer/run-now")
+async def timer_run_now():
+    if not _scheduler:
+        return JSONResponse({"error": "Scheduler not initialized"}, status_code=500)
+    await _scheduler.run_now()
+    return _scheduler.status
+
+
+@app.get("/timer/status")
+async def timer_status():
+    if not _scheduler:
+        return JSONResponse({"error": "Scheduler not initialized"}, status_code=500)
+    return _scheduler.status
+
+
+# ── Status & skill definitions ────────────────────────────────────
+
 @app.get("/status")
 async def status():
+    timer = _scheduler.status if _scheduler else {}
     return {
         "status": "running",
         "uptime_seconds": round(time.time() - _start_time, 1),
         "skills_loaded": len(_skills),
         "model": os.getenv("LITELLM_MODEL", "unknown"),
         "event_subscriptions": _event_bus.subscriptions if _event_bus else {},
+        "timer": timer,
     }
 
 
@@ -345,28 +399,33 @@ async def reload_skills():
     skills_dir = Path("skills")
     new_skills = load_skills(skills_dir)
 
+    # Preserve timer running state across reload
+    was_running = _scheduler._running if _scheduler else False
+
     # Re-register schedules and events
     if _scheduler:
+        _scheduler.pause()
         _scheduler.clear()
     if _event_bus:
         _event_bus.clear()
 
     context_extras = {"event_bus": _event_bus}
-    demo_mode = os.getenv("DEMO_MODE") == "true"
 
     for skill in new_skills:
         trigger = skill.runtime_config.trigger
         if trigger == "scheduled":
-            if demo_mode and skill.runtime_config.trigger_config:
-                skill.runtime_config.trigger_config = "* * * * *"
             if _scheduler:
-                _scheduler.register(skill, context_extras=context_extras)
+                _scheduler.register_monitor(skill, context_extras=context_extras)
         elif trigger == "event":
             event_name = skill.runtime_config.trigger_config
             if event_name and _event_bus:
                 _event_bus.subscribe(event_name, skill, context_extras=context_extras)
 
     _skills = new_skills
+
+    # Restore timer state
+    if was_running and _scheduler:
+        _scheduler.start()
 
     # Also refresh MCP tools — agents may have been registered since startup
     from runtime import agent

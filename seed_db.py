@@ -1,19 +1,25 @@
 """
 Seed the demo SQLite database with scenario data.
 
-Each run randomly activates a subset of scenario threads, so re-seeding
-during a demo produces different agent behavior from the same skills.
+Two independent scenario threads, plus a normal baseline that's always present.
+The threads are designed so each monitor catches something different, and the
+incident-correlation skill only finds the "aha!" when both are active together.
 
 Threads (independently toggled):
-  Thread 1 — Data exfiltration: suspicious after-hours PII access
-  Thread 2 — Normal baseline: always present, healthy services and access
-  Thread 3 — Budget creep: costs climbing with no volume increase
+  Thread 1 — Data anomaly: James Liu pulling bulk PII at odd hours, but from
+             his normal IP. Data monitor flags it; security monitor sees nothing.
+  Thread 2 — Security anomaly: Unfamiliar IP brute-forcing auth, probing
+             customer-db. Security monitor flags it; data monitor sees nothing.
+  Both     — Correlation connects them: the unfamiliar IP from Thread 2 also
+             shows up in James Liu's most recent PII access from Thread 1.
+             Suggests compromised credentials + active exfiltration.
 
 Usage:
   uv run python seed_db.py              # random thread selection
-  uv run python seed_db.py --all        # all threads active
+  uv run python seed_db.py --all        # both threads active (worst day)
   uv run python seed_db.py --quiet      # only normal baseline (boring day)
-  uv run python seed_db.py --chaos      # all threads active (worst day)
+  uv run python seed_db.py --data       # only data anomaly thread
+  uv run python seed_db.py --security   # only security anomaly thread
 
 Run: uv run python seed_db.py
 """
@@ -27,6 +33,10 @@ from pathlib import Path
 DB_PATH = Path("demo.db")
 
 now = datetime.now(timezone.utc)
+
+# The suspicious external IP — shared across threads so correlation can connect them
+SUSPICIOUS_IP = f"198.51.100.{random.randint(10, 99)}"
+JAMES_NORMAL_IP = "10.0.1.47"
 
 
 def create_tables(conn: sqlite3.Connection):
@@ -203,52 +213,52 @@ def seed_service_metrics(conn: sqlite3.Connection):
     )
 
 
-def seed_security_events(conn: sqlite3.Connection, exfiltration: bool):
-    """Security events. Exfiltration thread adds the James Liu anomaly."""
+def seed_security_events(conn: sqlite3.Connection, data_anomaly: bool, security_anomaly: bool):
+    """Security events.
+
+    - data_anomaly: no security events for James Liu (data monitor catches this, not security)
+    - security_anomaly: unfamiliar IP probing auth-service, failed logins, port scan
+    - both: the unfamiliar IP also appears in James Liu's access (correlation connects them)
+    """
     rows = []
 
-    if exfiltration:
-        # Pick a random employee to be the suspicious actor? No — James Liu is the
-        # character for this, but vary the details slightly each seed.
-        suspicious_ip = f"198.51.100.{random.randint(10, 99)}"
-        normal_ip = "10.0.1.47"
-        nights = random.randint(2, 4)
-        base_row_count = random.randint(30000, 60000)
-
-        for days_ago in range(nights, 0, -1):
-            access_time = (now - timedelta(days=days_ago)).replace(
-                hour=random.randint(1, 4),
-                minute=random.randint(0, 59),
-                second=0, microsecond=0,
-            )
-            ip = suspicious_ip if days_ago == 1 else normal_ip
-            severity = "critical" if days_ago == 1 else "warning"
-            row_count = base_row_count + days_ago * random.randint(1000, 5000)
-
-            rows.append((
-                access_time.isoformat(), "after_hours_access", severity, "jliu", ip,
-                "customer-pii",
-                f"User jliu accessed customer-pii dataset at {access_time.strftime('%H:%M')} "
-                f"from IP {ip}. Row count: {row_count}. "
-                f"Normal access pattern for this user is <500 rows during business hours."
-            ))
-
+    if security_anomaly:
+        # Unfamiliar IP brute-forcing auth — this is a network/auth threat, NOT data access
         rows.append((
-            (now - timedelta(days=1)).replace(hour=3, minute=15).isoformat(),
-            "unfamiliar_ip", "critical", "jliu", suspicious_ip,
+            (now - timedelta(hours=6)).isoformat(),
+            "failed_login_burst", "warning", None, SUSPICIOUS_IP,
+            "auth-service",
+            f"14 failed login attempts from IP {SUSPICIOUS_IP} in 3-minute window targeting "
+            f"auth-service. Multiple usernames attempted. No successful auth."
+        ))
+        rows.append((
+            (now - timedelta(hours=5, minutes=45)).isoformat(),
+            "port_scan", "warning", None, SUSPICIOUS_IP,
             "customer-db",
-            f"Login from unrecognized IP {suspicious_ip} for user jliu. "
+            f"Port scan detected from IP {SUSPICIOUS_IP} against customer-db (ports 5432, 3306, 27017). "
+            f"This IP is not in any known allow-list. Geo: Eastern Europe."
+        ))
+        rows.append((
+            (now - timedelta(hours=5, minutes=30)).isoformat(),
+            "unfamiliar_ip", "critical", None, SUSPICIOUS_IP,
+            "auth-service",
+            f"IP {SUSPICIOUS_IP} successfully authenticated as user 'jliu' after prior failed attempts. "
             f"This IP has not been seen in the last 90 days of access logs. "
-            f"User's normal IPs: {normal_ip}, 10.0.1.48."
+            f"User's normal IPs: {JAMES_NORMAL_IP}, 10.0.1.48."
+            if data_anomaly else
+            f"IP {SUSPICIOUS_IP} not recognized. No successful authentication, but probing continues. "
+            f"Recommend firewall block pending investigation."
         ))
 
-        rows.append((
-            (now - timedelta(days=1)).replace(hour=3, minute=30).isoformat(),
-            "data_exfiltration_risk", "critical", "jliu", suspicious_ip,
-            "customer-pii",
-            f"Bulk data access detected: {base_row_count} rows extracted from customer-pii "
-            f"in single session. This is 100x the user's typical query volume. Flagged for review."
-        ))
+        if not data_anomaly:
+            # Security-only: the IP never got in, just probing
+            rows.append((
+                (now - timedelta(hours=5)).isoformat(),
+                "firewall_block", "info", None, SUSPICIOUS_IP,
+                "perimeter",
+                f"Auto-blocked IP {SUSPICIOUS_IP} after repeated probe attempts. "
+                f"No successful access to any internal system."
+            ))
 
     # Normal/routine security events — always present
     rows.append((
@@ -310,13 +320,17 @@ def seed_datasets(conn: sqlite3.Connection):
     )
 
 
-def seed_data_access_logs(conn: sqlite3.Connection, exfiltration: bool):
-    """Access logs. Exfiltration thread adds James Liu's anomalous pattern."""
+def seed_data_access_logs(conn: sqlite3.Connection, data_anomaly: bool, security_anomaly: bool):
+    """Access logs.
+
+    - data_anomaly: James Liu pulling bulk PII at odd hours from his NORMAL IP.
+      Data monitor catches the volume; security sees nothing (familiar IP, no auth alerts).
+    - both active: James Liu's most recent access switches to SUSPICIOUS_IP.
+      This is the detail that lets correlation connect the two threads.
+    """
     rows = []
 
-    if exfiltration:
-        suspicious_ip = f"198.51.100.{random.randint(10, 99)}"
-        normal_ip = "10.0.1.47"
+    if data_anomaly:
         nights = random.randint(2, 4)
         base_row_count = random.randint(30000, 60000)
 
@@ -326,7 +340,12 @@ def seed_data_access_logs(conn: sqlite3.Connection, exfiltration: bool):
                 minute=random.randint(0, 59),
                 second=0, microsecond=0,
             )
-            ip = suspicious_ip if days_ago == 1 else normal_ip
+            # Key difference: when both threads are active, the most recent night
+            # uses the suspicious IP. Otherwise it's always James's normal IP.
+            if days_ago == 1 and security_anomaly:
+                ip = SUSPICIOUS_IP
+            else:
+                ip = JAMES_NORMAL_IP
             row_count = base_row_count + days_ago * random.randint(1000, 5000)
 
             rows.append((
@@ -341,21 +360,22 @@ def seed_data_access_logs(conn: sqlite3.Connection, exfiltration: bool):
         )
         rows.append((
             "financial-transactions", "jliu", access_time.isoformat(),
-            "select", 200 + days_ago * 30, "10.0.1.47", 800,
+            "select", 200 + days_ago * 30, JAMES_NORMAL_IP, 800,
         ))
 
-    # Sarah Chen — normal access pattern, always present
-    for hours_ago in range(8, 0, -1):
-        ts = (now - timedelta(hours=hours_ago)).isoformat()
+    # Sarah Chen — normal access pattern during business hours, always present
+    today = now.replace(minute=0, second=0, microsecond=0)
+    for hour in [9, 10, 11, 13, 14, 15, 16, 17]:
+        ts = today.replace(hour=hour).isoformat()
         rows.append((
-            "customer-360", "schen", ts, "select", 150 + hours_ago * 20,
-            "10.0.1.22", 200 + hours_ago * 50,
+            "customer-360", "schen", ts, "select", 100 + hour * 10,
+            "10.0.1.22", 200 + hour * 20,
         ))
 
-    for hours_ago in range(12, 0, -2):
-        ts = (now - timedelta(hours=hours_ago)).isoformat()
+    for hour in [9, 11, 14, 16]:
+        ts = today.replace(hour=hour, minute=30).isoformat()
         rows.append((
-            "sales-events", "schen", ts, "select", 5000 + hours_ago * 100,
+            "sales-events", "schen", ts, "select", 400 + hour * 30,
             "10.0.1.22", 1200,
         ))
 
@@ -376,8 +396,8 @@ def seed_data_access_logs(conn: sqlite3.Connection, exfiltration: bool):
     )
 
 
-def seed_cost_records(conn: sqlite3.Connection, budget_creep: bool):
-    """Cost records. Budget creep inflates analytics-pipeline."""
+def seed_cost_records(conn: sqlite3.Connection):
+    """Cost records — always normal. No budget anomaly thread."""
     rows = []
 
     months = [
@@ -387,46 +407,16 @@ def seed_cost_records(conn: sqlite3.Connection, budget_creep: bool):
         ((now.replace(day=1) - timedelta(days=63)).replace(day=1), "month-3"),
     ]
 
-    # payments-api
-    payments_budget = 18000
-    payments_costs = [16500, 17500, 17200, 16800]
-    for (month_dt, label), spend in zip(months, payments_costs):
-        period = month_dt.strftime("%Y-%m")
-        rows.append(("payments-api", "Payments", period, spend, payments_budget, None))
-
-    # analytics-pipeline
-    pipeline_budget = 8000
-    if budget_creep:
-        pipeline_costs = [9200, 8000, 6950, 6050]
-        pipeline_note = "15% MoM increase — no corresponding data volume growth"
-    else:
-        pipeline_costs = [7200, 7000, 6950, 6800]
-        pipeline_note = None
-    for (month_dt, label), spend in zip(months, pipeline_costs):
-        period = month_dt.strftime("%Y-%m")
-        notes = pipeline_note if label == "current" else None
-        rows.append(("analytics-pipeline", "Data Platform", period, spend, pipeline_budget, notes))
-
-    # customer-db
-    cdb_budget = 12000
-    cdb_costs = [11200, 11500, 11200, 11000]
-    for (month_dt, label), spend in zip(months, cdb_costs):
-        period = month_dt.strftime("%Y-%m")
-        rows.append(("customer-db", "Data Platform", period, spend, cdb_budget, None))
-
-    # auth-service — always under budget
-    auth_budget = 5000
-    auth_costs = [3200, 3100, 3150, 3050]
-    for (month_dt, label), spend in zip(months, auth_costs):
-        period = month_dt.strftime("%Y-%m")
-        rows.append(("auth-service", "Security", period, spend, auth_budget, None))
-
-    # reporting-dashboard — always well under budget
-    dash_budget = 2000
-    dash_costs = [850, 800, 820, 790]
-    for (month_dt, label), spend in zip(months, dash_costs):
-        period = month_dt.strftime("%Y-%m")
-        rows.append(("reporting-dashboard", "Finance", period, spend, dash_budget, None))
+    for service, project, budget, costs in [
+        ("payments-api",        "Payments",      18000, [16500, 17500, 17200, 16800]),
+        ("analytics-pipeline",  "Data Platform",  8000, [7200, 7000, 6950, 6800]),
+        ("customer-db",         "Data Platform", 12000, [11200, 11500, 11200, 11000]),
+        ("auth-service",        "Security",       5000, [3200, 3100, 3150, 3050]),
+        ("reporting-dashboard", "Finance",        2000, [850, 800, 820, 790]),
+    ]:
+        for (month_dt, _label), spend in zip(months, costs):
+            period = month_dt.strftime("%Y-%m")
+            rows.append((service, project, period, spend, budget, None))
 
     conn.executemany(
         "INSERT INTO cost_records (service, project, period, spend, budget, notes) "
@@ -438,22 +428,32 @@ def seed_cost_records(conn: sqlite3.Connection, budget_creep: bool):
 def main():
     parser = argparse.ArgumentParser(description="Seed demo.db with scenario data")
     parser.add_argument("--all", "--chaos", action="store_true",
-                        help="Activate all scenario threads (worst day)")
+                        help="Both anomaly threads active (worst day — correlation connects them)")
     parser.add_argument("--quiet", action="store_true",
-                        help="Only normal baseline (boring day)")
+                        help="Only normal baseline (boring day — monitors find nothing)")
+    parser.add_argument("--data", action="store_true",
+                        help="Only data anomaly thread (James Liu bulk PII, security clean)")
+    parser.add_argument("--security", action="store_true",
+                        help="Only security anomaly thread (unfamiliar IP probing, data clean)")
     args = parser.parse_args()
 
     # Decide which threads are active
     if args.quiet:
-        exfiltration = False
-        budget_creep = False
+        data_anomaly = False
+        security_anomaly = False
     elif args.all:
-        exfiltration = True
-        budget_creep = True
+        data_anomaly = True
+        security_anomaly = True
+    elif args.data:
+        data_anomaly = True
+        security_anomaly = False
+    elif args.security:
+        data_anomaly = False
+        security_anomaly = True
     else:
         # Random selection — each thread independently toggled
-        exfiltration = random.random() < 0.5
-        budget_creep = random.random() < 0.4
+        data_anomaly = random.random() < 0.5
+        security_anomaly = random.random() < 0.5
 
     if DB_PATH.exists():
         DB_PATH.unlink()
@@ -464,10 +464,10 @@ def main():
         seed_employees(conn)
         seed_services(conn)
         seed_service_metrics(conn)
-        seed_security_events(conn, exfiltration=exfiltration)
+        seed_security_events(conn, data_anomaly=data_anomaly, security_anomaly=security_anomaly)
         seed_datasets(conn)
-        seed_data_access_logs(conn, exfiltration=exfiltration)
-        seed_cost_records(conn, budget_creep=budget_creep)
+        seed_data_access_logs(conn, data_anomaly=data_anomaly, security_anomaly=security_anomaly)
+        seed_cost_records(conn)
         conn.commit()
 
         # Print summary
@@ -479,9 +479,12 @@ def main():
             print(f"  {table}: {count} rows")
 
         print(f"\nActive threads:")
-        print(f"  {'✓' if exfiltration else '·'} Data exfiltration (suspicious PII access)")
+        print(f"  {'✓' if data_anomaly else '·'} Data anomaly (James Liu bulk PII access)")
+        print(f"  {'✓' if security_anomaly else '·'} Security anomaly (unfamiliar IP probing)")
         print(f"  ✓ Normal baseline (always on)")
-        print(f"  {'✓' if budget_creep else '·'} Budget creep (analytics-pipeline cost growth)")
+        if data_anomaly and security_anomaly:
+            print(f"\n  ⚡ Both active — correlation will connect: IP {SUSPICIOUS_IP}")
+            print(f"     appears in both security events AND James Liu's latest PII access")
     finally:
         conn.close()
 

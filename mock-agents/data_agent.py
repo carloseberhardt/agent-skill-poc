@@ -160,19 +160,140 @@ def pause_pipeline(dataset: str) -> str:
 
 
 @tool
-def revoke_anomalous_access(user_id: str) -> str:
-    """Revoke high-volume data access entries for a user. Removes access log entries
-    with row count > 5000, simulating an access restriction."""
+def list_access(user_id: str = "", dataset: str = "") -> str:
+    """List who is authorized to access a dataset, or what a user can access.
+
+    Authorization is based on clearance levels:
+      top-secret → can access pii, confidential, and internal datasets
+      secret     → can access confidential and internal datasets
+      internal   → can access internal datasets only
+
+    When querying by dataset, shows all employees whose clearance grants access.
+    When querying by user, shows which dataset classifications they can access
+    and their recent access history."""
     conn = get_db()
     try:
-        deleted = conn.execute(
-            "DELETE FROM data_access_logs WHERE user_id = ? AND row_count > 5000",
-            (user_id,)
-        ).rowcount
+        # Clearance hierarchy: which clearances can access which classifications
+        clearance_grants = {
+            "pii": ["top-secret"],
+            "confidential": ["top-secret", "secret"],
+            "internal": ["top-secret", "secret", "internal"],
+        }
+
+        if dataset:
+            ds = conn.execute(
+                "SELECT name, classification FROM datasets WHERE name = ?", (dataset,)
+            ).fetchone()
+            if not ds:
+                return f"Dataset '{dataset}' not found."
+
+            allowed_clearances = clearance_grants.get(ds["classification"], [])
+            placeholders = ",".join("?" * len(allowed_clearances))
+            employees = conn.execute(
+                f"SELECT id, name, role, department, clearance FROM employees "
+                f"WHERE clearance IN ({placeholders}) ORDER BY clearance DESC, name",
+                allowed_clearances,
+            ).fetchall()
+
+            lines = [
+                f"Dataset '{dataset}' [{ds['classification'].upper()}] — "
+                f"requires clearance: {', '.join(allowed_clearances)}",
+                f"Authorized users ({len(employees)}):",
+            ]
+            for emp in employees:
+                # Check recent access history
+                last = conn.execute(
+                    "SELECT MAX(timestamp) as last_access, COUNT(*) as count "
+                    "FROM data_access_logs WHERE user_id = ? AND dataset = ?",
+                    (emp["id"], dataset),
+                ).fetchone()
+                access_note = (
+                    f"last access: {last['last_access']}, {last['count']} total"
+                    if last["count"] > 0
+                    else "no access history"
+                )
+                lines.append(
+                    f"  {emp['name']} ({emp['role']}, {emp['department']}) "
+                    f"[{emp['clearance']}] — {access_note}"
+                )
+            return "\n".join(lines)
+
+        elif user_id:
+            emp = conn.execute(
+                "SELECT * FROM employees WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not emp:
+                return f"Employee '{user_id}' not found."
+
+            # What classifications can this clearance access?
+            accessible = [
+                cls for cls, clearances in clearance_grants.items()
+                if emp["clearance"] in clearances
+            ]
+            lines = [
+                f"{emp['name']} ({emp['role']}) — clearance: {emp['clearance']}",
+                f"Can access dataset classifications: {', '.join(accessible) or 'none'}",
+                "Recent access history:",
+            ]
+            rows = conn.execute(
+                "SELECT dal.dataset, d.classification, COUNT(*) as count, "
+                "MAX(dal.timestamp) as last_access, MAX(dal.row_count) as max_rows "
+                "FROM data_access_logs dal "
+                "JOIN datasets d ON dal.dataset = d.name "
+                "WHERE dal.user_id = ? GROUP BY dal.dataset ORDER BY last_access DESC",
+                (user_id,),
+            ).fetchall()
+            if rows:
+                for r in rows:
+                    authorized = r["classification"] in accessible
+                    flag = "" if authorized else " ⚠ UNAUTHORIZED"
+                    lines.append(
+                        f"  {r['dataset']} [{r['classification'].upper()}] — "
+                        f"{r['count']} accesses, last: {r['last_access']}, "
+                        f"max rows: {r['max_rows']:,}{flag}"
+                    )
+            else:
+                lines.append("  No access history.")
+            return "\n".join(lines)
+        else:
+            return "Please provide either a user_id or dataset name to query."
+    finally:
+        conn.close()
+
+
+@tool
+def modify_clearance(user_id: str, new_clearance: str, reason: str) -> str:
+    """Change an employee's clearance level. Valid levels: internal, secret, top-secret.
+
+    This controls which datasets the user can access:
+      top-secret → pii, confidential, internal
+      secret     → confidential, internal
+      internal   → internal only
+
+    Downgrading clearance effectively revokes access to higher-classification datasets."""
+    valid = ("internal", "secret", "top-secret")
+    if new_clearance not in valid:
+        return f"Invalid clearance '{new_clearance}'. Must be one of: {', '.join(valid)}"
+
+    conn = get_db()
+    try:
+        emp = conn.execute("SELECT id, name, clearance FROM employees WHERE id = ?", (user_id,)).fetchone()
+        if not emp:
+            return f"Employee '{user_id}' not found."
+
+        old_clearance = emp["clearance"]
+        if old_clearance == new_clearance:
+            return f"{emp['name']} already has clearance '{new_clearance}'. No change made."
+
+        conn.execute(
+            "UPDATE employees SET clearance = ? WHERE id = ?",
+            (new_clearance, user_id),
+        )
         conn.commit()
-        if deleted == 0:
-            return f"No high-volume access entries found for user '{user_id}'. No changes made."
-        return f"Revoked {deleted} high-volume access entries for user '{user_id}'."
+        return (
+            f"Clearance for {emp['name']} ({user_id}) changed: {old_clearance} → {new_clearance}. "
+            f"Reason: {reason}"
+        )
     finally:
         conn.close()
 
@@ -180,7 +301,7 @@ def revoke_anomalous_access(user_id: str) -> str:
 # ── Agent setup ───────────────────────────────────────────────
 
 _tools = [get_dataset_inventory, get_recent_access, get_access_anomalies,
-          get_employee_info, pause_pipeline, revoke_anomalous_access]
+          get_employee_info, pause_pipeline, list_access, modify_clearance]
 
 _system_prompt = (
     f"You are a data platform analysis agent running on model: {model_name}. "
@@ -238,9 +359,10 @@ def build_app():
     agent_card = AgentCard(
         name="data_agent",
         description=(
-            f"Data platform domain agent (model: {model_name}). Investigates dataset health, "
-            "pipeline status, and data access patterns using its own tools and reasoning. "
-            "Can execute actions (pause pipelines, revoke access)."
+            f"Data platform domain agent (model: {model_name}). Manages datasets, pipelines, "
+            "data access patterns, and user clearance levels. Can investigate anomalies, "
+            "list who is authorized to access datasets, modify user clearance levels, "
+            "and pause pipelines."
         ),
         url=f"http://localhost:{_PORT}",
         version="0.3.0",
@@ -251,12 +373,18 @@ def build_app():
             AgentSkill(
                 id="query_data_platform",
                 name="Query Data Platform",
-                description="Investigate data platform health: dataset freshness, pipeline status, access patterns, and anomalies. Uses tools to query data and reason about findings.",
-                tags=["data", "platform", "pipelines", "access-patterns"],
+                description=(
+                    "Investigate data platform health, access patterns, and authorization. "
+                    "Can check dataset freshness, find access anomalies, list who is authorized "
+                    "to access a dataset based on clearance levels, and modify user clearance "
+                    "to grant or revoke access to data classifications (pii, confidential, internal)."
+                ),
+                tags=["data", "platform", "pipelines", "access-patterns", "clearance"],
                 examples=[
                     "What's the health of our data pipelines?",
                     "Any unusual data access patterns?",
-                    "Which datasets are stale?",
+                    "Who is authorized to access customer-pii?",
+                    "Downgrade Jane Doe's clearance to internal",
                 ],
             ),
         ],

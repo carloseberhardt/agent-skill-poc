@@ -28,14 +28,21 @@ _INVOKE_PATTERN = re.compile(r"\[INVOKE:([\w-]+)\]")
 _EMIT_PATTERN = re.compile(r"\[EMIT:([\w_]+)\]")
 
 # Output format instructions appended to skill instructions based on ui_type
+_GROUNDING_RULE = (
+    "\n\nIMPORTANT: Only include facts that came directly from your tool calls. "
+    "If a tool returned no results, say so — do not fabricate data to fill gaps."
+)
+
 _FORMAT_INSTRUCTIONS = {
     "card": (
+        _GROUNDING_RULE +
         "\n\nRespond with a JSON object containing exactly these keys:\n"
         '- "title": a short headline\n'
         '- "bullets": an array of 3-5 concise bullet point strings\n'
         "Do not include any text outside the JSON object."
     ),
     "approval": (
+        _GROUNDING_RULE +
         "\n\nRespond with a JSON object containing exactly these keys:\n"
         '- "title": a short headline\n'
         '- "bullets": an array of 3-5 key findings\n'
@@ -47,7 +54,12 @@ _FORMAT_INSTRUCTIONS = {
         "'security-agent_query_security'). If false, omit this key.\n"
         "Do not include any text outside the JSON object."
     ),
-    "chat": "\n\nRespond conversationally in plain text. Keep responses concise and helpful.",
+    "chat": (
+        "\n\nRespond conversationally in plain text. Keep responses concise and helpful."
+        "\n\nIMPORTANT: Only state facts that came from tool results or skill output. "
+        "If you don't have data to answer a question, say so — never invent "
+        "metrics, or other specifics."
+    ),
 }
 
 
@@ -212,7 +224,7 @@ async def execute_skill(skill: Skill, context: dict) -> SkillResult:
     system_prompt = _build_system_prompt(skill, all_skills if all_skills else None)
     user_prompt = _build_user_prompt(skill, context)
 
-    response = await agent.invoke(user_prompt, system_prompt=system_prompt)
+    response = await agent.invoke(user_prompt, system_prompt=system_prompt, skill_name=skill.name)
 
     trace.info("[%s]   ← %s responded (%d chars)", trace_id, skill.name, len(response))
 
@@ -260,7 +272,7 @@ async def execute_skill(skill: Skill, context: dict) -> SkillResult:
             if event_bus:
                 trace.info("[%s]   ⤷ EMIT %s (from %s)", trace_id, event_name, skill.name)
                 asyncio.create_task(event_bus.emit(event_name,
-                    {"source_skill": skill.name, "trace_id": trace_id}))
+                    {"source_skill": skill.name}))
 
         # Strip emit markers before parsing JSON
         clean_response = _EMIT_PATTERN.sub("", response).strip()
