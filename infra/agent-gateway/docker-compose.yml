@@ -6,7 +6,7 @@ services:
       - "3000:3000"    # A2A + MCP listener
       - "15000:15000"  # Admin UI
     volumes:
-      - ./config.yaml:/config.yaml:ro
+      - ./config.yaml:/config.yaml:ro,Z
     command: ["-f", "/config.yaml"]
     environment:
       ADMIN_ADDR: "0.0.0.0:15000"
