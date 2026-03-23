@@ -258,45 +258,105 @@ async def handle_action(request: Request):
 async def a2a_callback(request: Request):
     """Receive push notifications from A2A agents.
 
-    Agents POST task state updates here when they detect something noteworthy.
-    The runtime maps the agent source to an event name and emits it on the
-    internal event bus, which triggers any subscribed skills.
+    The a2a-sdk's BasePushNotificationSender POSTs the full Task object here.
+    We parse it as a proper A2A Task, then either:
+      1. Correlate it to a pending task we're tracking (async tool call response)
+      2. Fall back to emitting on the event bus (agent-initiated push)
     """
+    from a2a.types import Task as A2ATask, TaskState
+    from a2a.utils.parts import get_text_parts
+    from a2a.utils.message import get_message_text
+    from runtime.agent import get_pending_task, resolve_pending_task, _extract_task_text
+
     body = await request.json()
     logger.info("A2A callback received: %s", json.dumps(body)[:200])
 
-    # Extract event metadata from the task — agents include this in their response
-    result = body.get("result", body)
-    event_type = None
+    # Parse as proper A2A Task
+    try:
+        task = A2ATask.model_validate(body)
+    except Exception:
+        logger.warning("Could not parse A2A callback as Task, falling back to raw handling")
+        # Legacy fallback for non-standard pushes
+        if _event_bus:
+            await _event_bus.emit("agent_notification", {"raw": body})
+        return JSONResponse({"status": "received", "event": "agent_notification"}, status_code=202)
+
+    task_id = task.id
+    state = task.status.state
+    text = _extract_task_text(task)
+
+    # Check if this correlates to a pending async task
+    pending = get_pending_task(task_id)
+    if pending:
+        agent_name = pending.get("agent_name", "unknown")
+        original_query = pending.get("query", "")
+
+        await broadcast_activity(
+            f"Push notification from {agent_name}: task {task_id} → {state.value}",
+            "agent",
+            detail={"type": "push_notification", "agent": agent_name, "task_id": task_id, "state": state.value},
+        )
+
+        if state in {TaskState.completed, TaskState.failed, TaskState.canceled, TaskState.rejected}:
+            # Terminal state — build a SkillResult and broadcast
+            resolve_pending_task(task_id)
+
+            result = SkillResult(
+                skill_name=f"notification → {agent_name}",
+                ui_type="card",
+                content={
+                    "title": f"Update from {agent_name}",
+                    "bullets": [text] if text else [f"Task {state.value}"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "task_id": task_id,
+                    "original_query": original_query,
+                },
+                timestamp=datetime.now(timezone.utc),
+                trigger_type="push_notification",
+                trigger_source=agent_name,
+            )
+            await broadcast_result(result)
+            logger.info("A2A push → SkillResult for task %s from %s (%s)", task_id, agent_name, state.value)
+
+        else:
+            # Non-terminal update (working progress, etc.) — just log activity
+            logger.info("A2A push → task %s from %s still %s", task_id, agent_name, state.value)
+
+        return JSONResponse({"status": "received", "task_id": task_id, "state": state.value}, status_code=202)
+
+    # No pending task match — agent-initiated push notification
+    # Map to event bus for event-driven skills
+    event_type = "agent_notification"
     source_agent = None
 
-    # Try to extract from task metadata or artifacts
-    for artifact in result.get("artifacts", []):
-        for part in artifact.get("parts", []):
-            if part.get("type") == "text" or part.get("kind") == "text":
+    # Try to identify source from task metadata or text content
+    if task.status.message:
+        msg_text = get_message_text(task.status.message)
+        try:
+            parsed = json.loads(msg_text)
+            event_type = parsed.get("event_type", event_type)
+            source_agent = parsed.get("source_agent") or parsed.get("agent")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Fallback: check artifacts for structured event data
+    if source_agent is None:
+        for artifact in (task.artifacts or []):
+            for part_text in get_text_parts(artifact.parts):
                 try:
-                    parsed = json.loads(part.get("text", ""))
-                    event_type = parsed.get("event_type")
+                    parsed = json.loads(part_text)
+                    event_type = parsed.get("event_type", event_type)
                     source_agent = parsed.get("source_agent") or parsed.get("agent")
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-    # Fallback: map agent name to event type
-    if not event_type:
-        agent_map = {
-            "security": "security_alert",
-            "data": "data_anomaly",
-        }
-        for key, evt in agent_map.items():
-            if source_agent and key in source_agent.lower():
-                event_type = evt
-                break
-
-    if not event_type:
-        event_type = "agent_notification"
+    await broadcast_activity(
+        f"Agent push: {source_agent or 'unknown'} → {event_type}",
+        "agent",
+    )
 
     if _event_bus:
-        payload = {"source_agent": source_agent, "raw": body}
+        payload = {"source_agent": source_agent, "task": body, "text": text}
         await _event_bus.emit(event_type, payload)
         logger.info("A2A callback → emitted event '%s' from %s", event_type, source_agent)
 

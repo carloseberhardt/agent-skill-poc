@@ -40,6 +40,22 @@ binds:
             backends:
               - host: host.docker.internal:5002
 
+          # --- A2A: delivery-agent ---
+          - name: delivery-agent
+            matches:
+              - path:
+                  pathPrefix: /delivery-agent
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: [content-type, cache-control]
+              a2a: {}
+              urlRewrite:
+                path:
+                  prefix: /
+            backends:
+              - host: host.docker.internal:5006
+
           # --- MCP tool federation ---
           - name: mcp-tools
             matches:

@@ -4,6 +4,11 @@ pointed at the LiteLLM proxy, with dual tool loading:
   - MCP tools from Agent Gateway (cost API, employee lookup)
   - A2A agents wrapped as LangChain tools (data agent, security agent)
 
+A2A communication uses the a2a-sdk Client for spec-compliant message
+sending, agent card resolution, and push notification support. Agents
+that declare push_notifications=True in their agent card get non-blocking
+calls with a callback URL — the SDK handles the wire protocol.
+
 The model is an environment concern, not an application concern.
 Switching from anthropic/claude-sonnet to watsonx/granite requires
 changing one env var — no code changes.
@@ -15,9 +20,19 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
+from a2a.client import A2ACardResolver, ClientFactory, ClientConfig, Client, create_text_message_object
+from a2a.types import (
+    Message as A2AMessage,
+    PushNotificationConfig,
+    Task as A2ATask,
+    TaskState,
+)
+from a2a.utils.message import get_message_text
+from a2a.utils.parts import get_text_parts
 from dotenv import load_dotenv
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.tools import StructuredTool
@@ -37,11 +52,18 @@ _api_key = os.getenv("LITELLM_API_KEY", "")
 _gateway_url = os.getenv("AGENT_GATEWAY_URL", "http://localhost:3000")
 _gateway_mcp_url = os.getenv("AGENT_GATEWAY_MCP_URL", "http://localhost:3000/mcp")
 _a2a_agents = [a.strip() for a in os.getenv("AGENT_GATEWAY_A2A_AGENTS", "").split(",") if a.strip()]
+_callback_url = os.getenv("RUNTIME_CALLBACK_URL", "http://localhost:8000/a2a-callback")
 
 _llm = ChatOpenAI(model=_model, base_url=_base_url, api_key=_api_key)
 
 # A2A agent names — used to distinguish agent calls from tool calls in activity feed
 _a2a_tool_names: set[str] = set()
+
+# A2A SDK clients — one per agent, reused across calls
+_a2a_clients: dict[str, Client] = {}
+
+# Pending async A2A tasks — task_id → context for correlating push notifications
+_pending_tasks: dict[str, dict] = {}
 
 
 class _ActivityCallbackHandler(AsyncCallbackHandler):
@@ -116,6 +138,8 @@ class _ActivityCallbackHandler(AsyncCallbackHandler):
                                  detail={"type": "response", "tool": tool_name,
                                          "input": input_args, "output": output_str[:8000]})
 
+_TERMINAL_STATES = {TaskState.completed, TaskState.canceled, TaskState.failed, TaskState.rejected}
+
 # Tools and agent are initialized lazily on first invoke.
 _tools: list = []
 _agent = None
@@ -150,106 +174,140 @@ async def _init_mcp_tools() -> list:
         return []
 
 
-def _is_text_part(part: dict) -> bool:
-    """Check if an A2A part is a text part — handles both 'type' and 'kind' keys."""
-    return part.get("type") == "text" or part.get("kind") == "text"
-
-
-def _extract_a2a_text(response: dict) -> str:
-    """Extract text content from an A2A JSON-RPC response."""
-    # A2A message/send returns {result: {type: "task", ...}} with artifacts
-    result = response.get("result", response)
+def _extract_task_text(task: A2ATask) -> str:
+    """Extract text from an A2A Task — checks artifacts first, then status message."""
     texts = []
-
-    # Check for artifacts (list of parts)
-    for artifact in result.get("artifacts", []):
-        for part in artifact.get("parts", []):
-            if _is_text_part(part):
-                texts.append(part["text"])
-
+    for artifact in (task.artifacts or []):
+        texts.extend(get_text_parts(artifact.parts))
     if texts:
         return "\n".join(texts)
 
-    # Check for direct parts on result (kind: "message" format from a2a-sdk)
-    for part in result.get("parts", []):
-        if _is_text_part(part):
-            texts.append(part["text"])
+    # Fall back to status message
+    if task.status.message:
+        return get_message_text(task.status.message)
 
-    if texts:
-        return "\n".join(texts)
-
-    # Check status message
-    status = result.get("status", {})
-    message = status.get("message", {})
-    if isinstance(message, dict):
-        for part in message.get("parts", []):
-            if _is_text_part(part):
-                texts.append(part["text"])
-    elif isinstance(message, str):
-        texts.append(message)
-
-    if texts:
-        return "\n".join(texts)
-
-    return json.dumps(result)
+    return f"Task {task.id}: {task.status.state.value}"
 
 
-async def _call_a2a_agent(agent_url: str, query: str) -> str:
-    """Send an A2A message/send request and return the text response."""
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "message/send",
-        "params": {
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": query}],
-                "messageId": "tool-call-1",
+async def _call_a2a_agent(client: Client, agent_name: str, query: str, push_capable: bool) -> str:
+    """Send an A2A message via SDK client. Returns text for the LLM.
+
+    For push-capable agents, sends non-blocking — the SDK injects
+    push_notification_config from the ClientConfig automatically.
+    """
+    wire.info("A2A ▶ %s: %s", agent_name, query[:200])
+    message = create_text_message_object(content=query)
+
+    async for event in client.send_message(message):
+        # Direct message response (no task created)
+        if isinstance(event, A2AMessage):
+            text = get_message_text(event)
+            wire.info("A2A ◀ %s → message: %s", agent_name, text[:200])
+            return text
+
+        # ClientEvent = tuple[Task, UpdateEvent | None]
+        task, _update = event
+        state = task.status.state
+
+        if state == TaskState.working:
+            # Non-blocking — agent accepted and is working in background
+            _pending_tasks[task.id] = {
+                "agent_name": agent_name,
+                "query": query,
+                "timestamp": time.time(),
             }
-        },
-    }
-    wire.info("A2A ▶ POST %s", agent_url)
-    wire.info("A2A ▶ %s", query[:200])
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(agent_url, json=payload)
-        resp.raise_for_status()
-        text = _extract_a2a_text(resp.json())
-        wire.info("A2A ◀ %s → %s", agent_url.split("/")[-1], text[:200])
-        return text
+            status_msg = get_message_text(task.status.message) if task.status.message else "working"
+            wire.info("A2A ◀ %s → task %s (working): %s", agent_name, task.id, status_msg[:200])
+            return (
+                f"Task accepted (ID: {task.id}, state: working). "
+                f"Agent says: {status_msg}. "
+                f"The agent will send a notification when done."
+            )
+
+        if state == TaskState.input_required:
+            # Agent needs more info — return the question to the LLM
+            question = get_message_text(task.status.message) if task.status.message else "More information needed."
+            # Track so follow-up messages can reference this task
+            _pending_tasks[task.id] = {
+                "agent_name": agent_name,
+                "query": query,
+                "timestamp": time.time(),
+                "state": "input-required",
+            }
+            wire.info("A2A ◀ %s → task %s (input-required): %s", agent_name, task.id, question[:200])
+            return (
+                f"Agent needs more information (task ID: {task.id}). "
+                f"Agent says: {question}"
+            )
+
+        if state in _TERMINAL_STATES:
+            # Completed/failed/canceled/rejected — extract final answer
+            text = _extract_task_text(task)
+            wire.info("A2A ◀ %s → task %s (%s): %s", agent_name, task.id, state.value, text[:200])
+            return text
+
+        # Submitted or unknown — just report
+        wire.info("A2A ◀ %s → task %s (%s)", agent_name, task.id, state.value)
+        return f"Task {task.id} is in state: {state.value}"
+
+    return "No response from agent."
 
 
 async def _init_a2a_tools() -> list:
-    """Discover A2A agents via Agent Gateway and wrap each skill as a LangChain tool."""
+    """Discover A2A agents via Agent Gateway and wrap each skill as a LangChain tool.
+
+    Uses the a2a-sdk ClientFactory for spec-compliant agent card resolution
+    and Client for message sending. Agents declaring push_notifications=True
+    get non-blocking calls with push notification config.
+    """
     if not _a2a_agents:
         logger.info("No A2A agents configured")
         return []
 
     tools = []
     for agent_name in _a2a_agents:
-        card_url = f"{_gateway_url}/{agent_name}/.well-known/agent.json"
+        # Resolve agent card via SDK — Agent Gateway serves cards at /{name}/.well-known/agent.json
+        card_path = f"{agent_name}/.well-known/agent.json"
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(card_url)
-                resp.raise_for_status()
-                card = resp.json()
+            push_capable = False
+            async with httpx.AsyncClient(timeout=10) as http_client:
+                resolver = A2ACardResolver(http_client, _gateway_url)
+                card = await resolver.get_agent_card(relative_card_path=card_path)
+
+            # Check if agent supports push notifications
+            if card.capabilities and card.capabilities.push_notifications:
+                push_capable = True
+                logger.info("Agent %s supports push notifications", agent_name)
+
+            # Build client config — push-capable agents get non-blocking + callback URL
+            client_config = ClientConfig(
+                streaming=False,
+                polling=push_capable,  # polling=True → blocking=False in the SDK
+                push_notification_configs=(
+                    [PushNotificationConfig(url=_callback_url)]
+                    if push_capable else []
+                ),
+            )
+
+            # Create SDK client from the resolved card
+            client = ClientFactory(client_config).create(card)
+            _a2a_clients[agent_name] = client
+
         except Exception:
-            logger.warning("Could not fetch agent card from %s — skipping", card_url)
+            logger.warning("Could not connect to A2A agent %s — skipping", agent_name, exc_info=True)
             continue
 
-        agent_desc = card.get("description", agent_name)
-        # Use the URL from the agent card — Agent Gateway rewrites it to point through itself
-        agent_url = card.get("url", f"{_gateway_url}/{agent_name}")
-
-        for skill in card.get("skills", []):
-            skill_id = skill.get("id", agent_name)
-            skill_name = f"{agent_name}_{skill_id}"
-            skill_desc = skill.get("description", agent_desc)
+        for skill in card.skills:
+            skill_name = f"{agent_name}_{skill.id}"
+            skill_desc = skill.description or card.description or agent_name
 
             # Capture for closure
-            _url = agent_url
+            _client = client
+            _name = agent_name
+            _push = push_capable
 
-            async def _run(query: str, url: str = _url) -> str:
-                return await _call_a2a_agent(url, query)
+            async def _run(query: str, c: Client = _client, n: str = _name, p: bool = _push) -> str:
+                return await _call_a2a_agent(c, n, query, push_capable=p)
 
             tool = StructuredTool.from_function(
                 coroutine=_run,
@@ -257,10 +315,22 @@ async def _init_a2a_tools() -> list:
                 description=skill_desc,
             )
             tools.append(tool)
-            logger.info("Registered A2A tool: %s → %s", skill_name, agent_url)
+            logger.info("Registered A2A tool: %s (push=%s)", skill_name, push_capable)
 
     logger.info("Loaded %d A2A tool(s)", len(tools))
     return tools
+
+
+# ── Pending task accessors (used by /a2a-callback) ──────────────
+
+def get_pending_task(task_id: str) -> dict | None:
+    """Look up a pending async task by ID. Returns None if not found."""
+    return _pending_tasks.get(task_id)
+
+
+def resolve_pending_task(task_id: str) -> dict | None:
+    """Look up and remove a pending async task. Returns the context or None."""
+    return _pending_tasks.pop(task_id, None)
 
 
 def has_tools() -> bool:
@@ -331,6 +401,13 @@ async def refresh_tools() -> None:
     global _tools, _agent, _initialized
     _initialized = False
     _a2a_tool_names.clear()
+    # Close existing A2A clients before re-creating
+    for client in _a2a_clients.values():
+        try:
+            await client.close()
+        except Exception:
+            pass
+    _a2a_clients.clear()
     mcp_tools = await _init_mcp_tools()
     a2a_tools = await _init_a2a_tools()
     _a2a_tool_names.update(t.name for t in a2a_tools)
@@ -341,6 +418,12 @@ async def refresh_tools() -> None:
 
 
 async def cleanup() -> None:
-    """Shutdown hook — placeholder for client cleanup if needed."""
+    """Shutdown hook — close A2A clients."""
     global _initialized
     _initialized = False
+    for client in _a2a_clients.values():
+        try:
+            await client.close()
+        except Exception:
+            pass
+    _a2a_clients.clear()
