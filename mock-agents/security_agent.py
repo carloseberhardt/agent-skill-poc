@@ -10,9 +10,14 @@ Serves on port 5002.
 """
 
 import json
+import warnings
 from datetime import datetime, timezone
 
 import uvicorn
+
+# langgraph v1.0 moved create_react_agent to langchain.agents, but we don't
+# depend on the full langchain package — suppress until we upgrade.
+warnings.filterwarnings("ignore", message="create_react_agent has been moved")
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.events import EventQueue

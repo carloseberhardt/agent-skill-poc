@@ -27,6 +27,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("solis.main")
 
+
+class _QuietPollFilter(logging.Filter):
+    """Suppress noisy poll endpoints (GET /status, /timer/status, /events).
+
+    Lets every 6th request through (~once per minute at 10s intervals)
+    so you can still confirm the frontend is connected.
+    """
+    _counts: dict[str, int] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        for endpoint in ("GET /status ", "GET /timer/status ", "GET /events "):
+            if endpoint in msg:
+                self._counts[endpoint] = self._counts.get(endpoint, 0) + 1
+                return self._counts[endpoint] % 6 == 1  # first hit + every 6th
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPollFilter())
+
 # Wire logger — clean protocol-level A2A/MCP/LLM traffic for demos.
 # Enable with WIRE_LOG=true in .env
 wire_logger = logging.getLogger("solis.wire")

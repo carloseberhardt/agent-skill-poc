@@ -64,6 +64,13 @@ _sse_clients: set[asyncio.Queue] = set()
 _result_history: list[SkillResult] = []
 _MAX_HISTORY = 20
 
+# Chat conversation history — stores recent user/assistant exchanges so the
+# chat skill has conversational context across invocations. Without this,
+# each chat message is independent and the LLM can't follow multi-turn flows
+# (e.g. delivery agent asking for a tracking number, user providing it next).
+_chat_history: list[dict[str, str]] = []  # [{"role": "user"|"assistant", "content": "..."}]
+_MAX_CHAT_HISTORY = 20  # messages, not turns
+
 
 def init(skills: list[Skill], scheduler: SkillScheduler, event_bus: EventBus) -> None:
     global _skills, _scheduler, _event_bus, _start_time
@@ -77,6 +84,16 @@ def init(skills: list[Skill], scheduler: SkillScheduler, event_bus: EventBus) ->
 
 def get_result_history() -> list[SkillResult]:
     return list(_result_history)
+
+
+def get_chat_history() -> list[dict[str, str]]:
+    return list(_chat_history)
+
+
+def append_chat_history(role: str, content: str) -> None:
+    _chat_history.append({"role": role, "content": content})
+    while len(_chat_history) > _MAX_CHAT_HISTORY:
+        _chat_history.pop(0)
 
 
 async def broadcast_result(result: SkillResult) -> None:
@@ -365,8 +382,9 @@ async def a2a_callback(request: Request):
 
 @app.post("/clear")
 async def clear_history():
-    """Clear all skill result history — resets the runtime's conversational context."""
+    """Clear all skill result history and chat history — resets the runtime's conversational context."""
     _result_history.clear()
+    _chat_history.clear()
     return {"status": "cleared"}
 
 

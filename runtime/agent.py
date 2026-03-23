@@ -21,7 +21,12 @@ import json
 import logging
 import os
 import time
+import warnings
 from typing import Any
+
+# langgraph v1.0 moved create_react_agent to langchain.agents, but we don't
+# depend on the full langchain package — suppress until we upgrade.
+warnings.filterwarnings("ignore", message="create_react_agent has been moved")
 
 import httpx
 from a2a.client import A2ACardResolver, ClientFactory, ClientConfig, Client, create_text_message_object
@@ -279,10 +284,12 @@ async def _init_a2a_tools() -> list:
                 push_capable = True
                 logger.info("Agent %s supports push notifications", agent_name)
 
-            # Build client config — push-capable agents get non-blocking + callback URL
+            # Build client config — push-capable agents get non-blocking + callback URL.
+            # Explicit timeout: A2A agents may call LLMs that take 20s+.
             client_config = ClientConfig(
                 streaming=False,
                 polling=push_capable,  # polling=True → blocking=False in the SDK
+                httpx_client=httpx.AsyncClient(timeout=60),
                 push_notification_configs=(
                     [PushNotificationConfig(url=_callback_url)]
                     if push_capable else []
@@ -301,16 +308,15 @@ async def _init_a2a_tools() -> list:
             skill_name = f"{agent_name}_{skill.id}"
             skill_desc = skill.description or card.description or agent_name
 
-            # Capture for closure
-            _client = client
-            _name = agent_name
-            _push = push_capable
-
-            async def _run(query: str, c: Client = _client, n: str = _name, p: bool = _push) -> str:
-                return await _call_a2a_agent(c, n, query, push_capable=p)
+            # Build closure — capture values without exposing them as tool parameters.
+            # Using default args for Client would leak it into the JSON schema.
+            def _make_runner(_c=client, _n=agent_name, _p=push_capable):
+                async def _run(query: str) -> str:
+                    return await _call_a2a_agent(_c, _n, query, push_capable=_p)
+                return _run
 
             tool = StructuredTool.from_function(
-                coroutine=_run,
+                coroutine=_make_runner(),
                 name=skill_name,
                 description=skill_desc,
             )

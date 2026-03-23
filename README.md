@@ -126,6 +126,16 @@ Open http://localhost:8000. The runtime is running with the activity feed visibl
 4. **Incident correlation.** Fire `incident_correlation` event. Cross-domain analysis across security and data agents, with employee and cost lookups.
 5. **Async delivery tracking.** In chat, ask "Tell me when package 241234 is delivered." Watch the activity feed: the delivery agent accepts immediately (state: `working`), the LLM tells you it's tracking. 30–150 seconds later, a card appears with the delivery confirmation — pushed by the agent via A2A push notification.
 6. **Input-required flow.** Ask "When will my package arrive?" without a tracking number. The agent asks for one. Say "never mind" — the task cancels.
+
+   The delivery agent recognizes these mock tracking numbers:
+
+   | Tracking # | Status | Location |
+   |---|---|---|
+   | `241234` | in-transit | Chicago, IL |
+   | `891011` | out-for-delivery | Austin, TX |
+   | `334455` | delivered | Denver, CO |
+   | `667788` | in-transit | Memphis, TN |
+   | `990011` | label-created | Awaiting pickup |
 7. **Approve an action.** Click "Approve" on an approval card. The agent executes the action and posts to Discord. Activity feed shows the entire flow.
 8. **View a skill.** Click the `{}` button next to any skill to see its SKILL.md — "this is all a skill is, a markdown file."
 9. **Re-seed and re-run.** Run `uv run python seed_db.py` in the terminal. Different scenario, different findings, same skills.

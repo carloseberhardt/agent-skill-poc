@@ -97,7 +97,7 @@ def _build_user_prompt(skill: Skill, context: dict) -> str:
 
     # Include recent history for chat skills
     if skill.runtime_config.ui_type == "chat":
-        from runtime.api import get_result_history
+        from runtime.api import get_result_history, get_chat_history
 
         recent = get_result_history()
         if recent:
@@ -106,6 +106,12 @@ def _build_user_prompt(skill: Skill, context: dict) -> str:
                 for r in recent
             ]
             parts.append(f"Recent skill output from the runtime:\n" + "\n".join(lines))
+
+        # Include chat conversation history so the LLM can follow multi-turn flows
+        chat_history = get_chat_history()
+        if chat_history:
+            lines = [f"{m['role'].capitalize()}: {m['content']}" for m in chat_history]
+            parts.append("Conversation history:\n" + "\n".join(lines))
 
     # User input (chat)
     if "input" in context:
@@ -247,16 +253,26 @@ async def execute_skill(skill: Skill, context: dict) -> SkillResult:
                 trace.info("[%s]   ⤷ INVOKE %s (from chat)", trace_id, skill_name)
 
                 async def _run_skill(s=target):
-                    from runtime.api import broadcast_result
-                    ctx = {"skill": s, "trigger": "chat", "event_bus": event_bus,
-                           "all_skills": all_skills, "trace_id": trace_id}
-                    result = await execute_skill(s, ctx)
-                    if result:
-                        await broadcast_result(result)
+                    try:
+                        from runtime.api import broadcast_result
+                        ctx = {"skill": s, "trigger": "chat", "event_bus": event_bus,
+                               "all_skills": all_skills, "trace_id": trace_id}
+                        result = await execute_skill(s, ctx)
+                        if result:
+                            await broadcast_result(result)
+                    except Exception:
+                        logger.exception("Background skill %s failed", s.name)
                 asyncio.create_task(_run_skill())
 
         response = _INVOKE_PATTERN.sub("", response).strip()
         content = {"message": response}
+
+        # Store the exchange in chat history for multi-turn context
+        user_input = context.get("input", "")
+        if user_input:
+            from runtime.api import append_chat_history
+            append_chat_history("user", user_input)
+            append_chat_history("assistant", response)
 
     # Card/approval: parse JSON
     elif ui_type in ("card", "approval"):
