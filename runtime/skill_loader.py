@@ -40,13 +40,47 @@ class SkillResult(BaseModel):
 
 
 class Skill(BaseModel):
+    """A skill loaded from a SKILL.md directory.
+
+    Follows the Agent Skills spec's progressive disclosure model:
+      1. Discovery — name + description loaded at startup (lightweight)
+      2. Activation — full instructions read from SKILL.md on first invoke
+      3. Execution — agent follows instructions with tools
+
+    Instructions are NOT loaded at discovery time. Call get_instructions()
+    when the skill is actually invoked.
+    """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str
     description: str
-    instructions: str
     path: Path
     runtime_config: RuntimeConfig
+
+    # Cached instructions — None until first activation
+    _instructions_cache: str | None = None
+
+    def get_instructions(self) -> str:
+        """Activate the skill: read full SKILL.md instructions from disk.
+
+        Cached after first read so repeated invocations don't hit disk.
+        """
+        if self._instructions_cache is not None:
+            return self._instructions_cache
+
+        skill_md_path = self.path / "SKILL.md"
+        if not skill_md_path.exists():
+            logger.warning("SKILL.md not found at activation time: %s", skill_md_path)
+            return ""
+
+        post = frontmatter.load(str(skill_md_path))
+        self._instructions_cache = post.content.strip()
+        logger.info("Skill activated (instructions loaded): %s", self.name)
+        return self._instructions_cache
+
+    def invalidate_cache(self) -> None:
+        """Clear cached instructions — used after hot-reload."""
+        self._instructions_cache = None
 
 
 def load_skills(skills_dir: Path) -> list[Skill]:
@@ -83,10 +117,12 @@ def load_skills(skills_dir: Path) -> list[Skill]:
             else:
                 runtime_config = RuntimeConfig()
 
+            # Discovery: load only name + description (not the full instructions).
+            # Instructions are read on demand when the skill is invoked —
+            # this follows the Agent Skills progressive disclosure model.
             skill = Skill(
                 name=name,
                 description=description,
-                instructions=post.content.strip(),
                 path=skill_dir,
                 runtime_config=runtime_config,
             )

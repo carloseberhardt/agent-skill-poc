@@ -64,8 +64,12 @@ _FORMAT_INSTRUCTIONS = {
 
 
 def _build_system_prompt(skill: Skill, all_skills: list[Skill] | None = None) -> str:
-    """Build system prompt from SKILL.md instructions + format instructions."""
-    base = skill.instructions
+    """Build system prompt from SKILL.md instructions + format instructions.
+
+    This is the "activation" step in progressive disclosure — the full
+    instructions are read from disk here, not at skill discovery time.
+    """
+    base = skill.get_instructions()
 
     # For chat skills, inject the list of available skills dynamically
     if skill.runtime_config.ui_type == "chat" and all_skills:
