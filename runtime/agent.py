@@ -289,7 +289,9 @@ async def _init_a2a_tools() -> list:
             client_config = ClientConfig(
                 streaming=False,
                 polling=push_capable,  # polling=True → blocking=False in the SDK
-                httpx_client=httpx.AsyncClient(timeout=60),
+                httpx_client=httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10, read=180, write=30, pool=10)
+                ),
                 push_notification_configs=(
                     [PushNotificationConfig(url=_callback_url)]
                     if push_capable else []

@@ -359,7 +359,7 @@ def seed_data_access_logs(conn: sqlite3.Connection, data_anomaly: bool, security
             hour=10, minute=30, second=0, microsecond=0
         )
         rows.append((
-            "financial-transactions", "jliu", access_time.isoformat(),
+            "analytics-summary", "jliu", access_time.isoformat(),
             "select", 200 + days_ago * 30, JAMES_NORMAL_IP, 800,
         ))
 

@@ -103,11 +103,19 @@ def get_recent_access(user_id: str = "", dataset: str = "", limit: int = 20) -> 
 
 @tool
 def get_access_anomalies(min_row_count: int = 5000) -> str:
-    """Find data access entries with unusually high row counts. Helps identify
-    potential exfiltration, runaway queries, or policy violations."""
+    """Find data access anomalies: unusually high row counts OR users accessing
+    datasets above their clearance level. Helps identify potential exfiltration,
+    runaway queries, or policy violations."""
     conn = get_db()
     try:
-        rows = conn.execute(
+        clearance_grants = {
+            "pii": ["top-secret"],
+            "confidential": ["top-secret", "secret"],
+            "internal": ["top-secret", "secret", "internal"],
+        }
+
+        # High row count anomalies
+        high_volume = conn.execute(
             "SELECT dal.user_id, e.name, e.role, e.department, "
             "dal.dataset, dal.row_count, dal.timestamp, dal.source_ip "
             "FROM data_access_logs dal "
@@ -117,15 +125,43 @@ def get_access_anomalies(min_row_count: int = 5000) -> str:
             (min_row_count,),
         ).fetchall()
 
-        if not rows:
-            return f"No access entries with row count > {min_row_count}. Access patterns appear normal."
+        # Clearance mismatch anomalies
+        all_access = conn.execute(
+            "SELECT dal.user_id, e.name, e.role, e.department, e.clearance, "
+            "dal.dataset, d.classification, dal.row_count, dal.timestamp, dal.source_ip "
+            "FROM data_access_logs dal "
+            "JOIN employees e ON dal.user_id = e.id "
+            "JOIN datasets d ON dal.dataset = d.name "
+            "ORDER BY dal.timestamp DESC",
+        ).fetchall()
+
+        unauthorized = [
+            r for r in all_access
+            if r["clearance"] not in clearance_grants.get(r["classification"], [])
+        ]
 
         lines = []
-        for a in rows:
-            lines.append(
-                f"{a['name']} ({a['role']}, {a['department']}) → {a['dataset']} "
-                f"| {a['row_count']:,} rows at {a['timestamp']} from IP {a['source_ip']}"
-            )
+
+        if high_volume:
+            lines.append("HIGH VOLUME ACCESS:")
+            for a in high_volume:
+                lines.append(
+                    f"  {a['name']} ({a['role']}, {a['department']}) → {a['dataset']} "
+                    f"| {a['row_count']:,} rows at {a['timestamp']} from IP {a['source_ip']}"
+                )
+
+        if unauthorized:
+            lines.append("UNAUTHORIZED ACCESS (clearance mismatch):")
+            for r in unauthorized:
+                lines.append(
+                    f"  {r['name']} ({r['role']}, {r['department']}) [{r['clearance']}] "
+                    f"→ {r['dataset']} [{r['classification'].upper()}] "
+                    f"| {r['row_count']:,} rows at {r['timestamp']} from IP {r['source_ip']}"
+                )
+
+        if not lines:
+            return f"No anomalies found. No access entries with row count > {min_row_count} and no clearance mismatches. Access patterns appear normal."
+
         return "\n".join(lines)
     finally:
         conn.close()
