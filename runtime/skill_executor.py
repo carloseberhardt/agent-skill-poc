@@ -50,8 +50,8 @@ _FORMAT_INSTRUCTIONS = {
         '- "action": if action_recommended is true, a string describing the recommended action. '
         "If false, omit this key.\n"
         '- "target_agent": if action_recommended is true, the agent that should '
-        "handle this action. Use the short agent name (e.g. 'security-agent' not "
-        "'security-agent_query_security'). If false, omit this key.\n"
+        "handle this action. Use the short agent name (e.g. 'agent-name' not "
+        "'agent-name_skill_id'). If false, omit this key.\n"
         "Do not include any text outside the JSON object."
     ),
     "chat": (

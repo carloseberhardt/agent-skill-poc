@@ -217,7 +217,6 @@ async def handle_action(request: Request):
         prompt += (
             "Execute this action now using your available tools and agents. "
             "Use as many agents and tools as needed to fully carry out the action. "
-            "After executing, use the Discord notification tool to post a summary of what was done."
         )
     else:
         prompt += (
