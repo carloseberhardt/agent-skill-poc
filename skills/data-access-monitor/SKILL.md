@@ -17,7 +17,7 @@ Step 2 — Assess risk:
 
 Present findings as a concise risk assessment.
 
-- If the access is clearly suspicious, recommend a specific data-domain action (e.g., revoke access, pause pipeline) and indicate the data agent should handle it.
+- If the access is clearly suspicious, recommend a specific data-domain action (e.g., revoke access, pause pipeline) and indicate the data agent should handle it. For suspicious activity the recommendation should include notifying the discord channel.
 - If the findings are informational only (e.g., normal patterns, explainable access), present them as a summary without recommending action.
 
 If you find any suspicious or anomalous activity, emit an incident correlation event so the runtime can cross-reference with other signals:

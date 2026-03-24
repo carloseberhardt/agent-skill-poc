@@ -10,7 +10,7 @@ Step 1 — Gather information:
 2. Use the employee lookup tool to identify affected users, their roles, departments, and managers.
 
 Step 2 — Assess and recommend:
-- If there is a clear security risk (data exfiltration, unauthorized access, unfamiliar IP), recommend a specific action and indicate which agent should handle it.
+- If there is a clear security risk (data exfiltration, unauthorized access, unfamiliar IP), recommend a specific action and indicate which agent should handle it. If there is a risk, the recommendation should include notifying the discord channel.
 - If the findings are informational only, present them as a summary without recommending action.
 
 If you find any suspicious activity or threats, emit an incident correlation event so the runtime can cross-reference with other signals:
