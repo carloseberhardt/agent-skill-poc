@@ -15,13 +15,16 @@ Step 2 — Assess risk:
 - If the access is explainable (e.g., a data engineer running scheduled ETL), note that.
 - If the access is suspicious (e.g., a finance analyst pulling 50k PII rows at 3am), flag it clearly.
 
-Present findings as a concise risk assessment.
+Step 3 — Present findings:
+Choose ONE of the following based on your assessment:
 
-- If the access is clearly suspicious, recommend a specific data-domain action (e.g., revoke access, pause pipeline) and indicate the data agent should handle it. For suspicious activity the recommendation should include notifying the discord channel.
-- If the findings are informational only (e.g., normal patterns, explainable access), present them as a summary without recommending action.
+A) Suspicious or anomalous activity detected:
+- Recommend a specific data-domain action (e.g., revoke access, pause pipeline) and indicate the data agent should handle it. The recommendation should include notifying the discord channel.
+- You MUST include the exact string [EMIT:incident_correlation] in your response. The runtime scans for this literal token to trigger cross-domain correlation. If you found suspicious activity and omit it, correlation will not run.
 
-If you find any suspicious or anomalous activity, emit an incident correlation event so the runtime can cross-reference with other signals:
-[EMIT:incident_correlation]
+B) No issues found (normal patterns, explainable access):
+- Present findings as an informational summary without recommending action.
+- Do NOT include [EMIT:incident_correlation].
 
 IMPORTANT:
 - Only use the data agent and employee lookup tool. Do NOT call the security agent — security monitoring is handled separately.

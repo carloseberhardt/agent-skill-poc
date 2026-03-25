@@ -214,13 +214,17 @@ async def _call_a2a_agent(client: Client, agent_name: str, query: str, push_capa
         task, _update = event
         state = task.status.state
 
+        # Always register the task so push notifications can be attributed
+        # to this agent. The A2A Task object doesn't carry agent identity,
+        # so this client-side mapping is the only way to correlate pushes.
+        _pending_tasks.setdefault(task.id, {
+            "agent_name": agent_name,
+            "query": query,
+            "timestamp": time.time(),
+        })
+
         if state == TaskState.working:
             # Non-blocking — agent accepted and is working in background
-            _pending_tasks[task.id] = {
-                "agent_name": agent_name,
-                "query": query,
-                "timestamp": time.time(),
-            }
             status_msg = get_message_text(task.status.message) if task.status.message else "working"
             wire.info("A2A ◀ %s → task %s (working): %s", agent_name, task.id, status_msg[:200])
             return (
@@ -232,13 +236,7 @@ async def _call_a2a_agent(client: Client, agent_name: str, query: str, push_capa
         if state == TaskState.input_required:
             # Agent needs more info — return the question to the LLM
             question = get_message_text(task.status.message) if task.status.message else "More information needed."
-            # Track so follow-up messages can reference this task
-            _pending_tasks[task.id] = {
-                "agent_name": agent_name,
-                "query": query,
-                "timestamp": time.time(),
-                "state": "input-required",
-            }
+            _pending_tasks[task.id]["state"] = "input-required"
             wire.info("A2A ◀ %s → task %s (input-required): %s", agent_name, task.id, question[:200])
             return (
                 f"Agent needs more information (task ID: {task.id}). "
@@ -286,6 +284,9 @@ async def _init_a2a_tools() -> list:
 
             # Build client config — push-capable agents get non-blocking + callback URL.
             # Explicit timeout: A2A agents may call LLMs that take 20s+.
+            # Per-agent callback URL so pushes can be attributed without
+            # relying on task ID lookups (which lose a race with the push).
+            agent_callback = f"{_callback_url}/{agent_name}"
             client_config = ClientConfig(
                 streaming=False,
                 polling=push_capable,  # polling=True → blocking=False in the SDK
@@ -293,7 +294,7 @@ async def _init_a2a_tools() -> list:
                     timeout=httpx.Timeout(connect=10, read=180, write=30, pool=10)
                 ),
                 push_notification_configs=(
-                    [PushNotificationConfig(url=_callback_url)]
+                    [PushNotificationConfig(url=agent_callback)]
                     if push_capable else []
                 ),
             )

@@ -360,7 +360,7 @@ def seed_data_access_logs(conn: sqlite3.Connection, data_anomaly: bool, security
         )
         rows.append((
             "analytics-summary", "jliu", access_time.isoformat(),
-            "select", 200 + days_ago * 30, JAMES_NORMAL_IP, 800,
+            "select", 40 + days_ago * 5, JAMES_NORMAL_IP, 800,
         ))
 
     # Sarah Chen — normal access pattern during business hours, always present
@@ -368,14 +368,14 @@ def seed_data_access_logs(conn: sqlite3.Connection, data_anomaly: bool, security
     for hour in [9, 10, 11, 13, 14, 15, 16, 17]:
         ts = today.replace(hour=hour).isoformat()
         rows.append((
-            "customer-360", "schen", ts, "select", 100 + hour * 10,
+            "customer-360", "schen", ts, "select", 20 + hour * 3,
             "10.0.1.22", 200 + hour * 20,
         ))
 
     for hour in [9, 11, 14, 16]:
         ts = today.replace(hour=hour, minute=30).isoformat()
         rows.append((
-            "sales-events", "schen", ts, "select", 400 + hour * 30,
+            "sales-events", "schen", ts, "select", 50 + hour * 5,
             "10.0.1.22", 1200,
         ))
 
@@ -386,7 +386,7 @@ def seed_data_access_logs(conn: sqlite3.Connection, data_anomaly: bool, security
     ))
     rows.append((
         "analytics-summary", "psharma", (now - timedelta(hours=1)).isoformat(),
-        "select", 500, "10.0.3.5", 300,
+        "select", 75, "10.0.3.5", 300,
     ))
 
     conn.executemany(

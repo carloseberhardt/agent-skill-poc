@@ -270,14 +270,15 @@ async def handle_action(request: Request):
         )
 
 
+@app.post("/a2a-callback/{agent_name}")
 @app.post("/a2a-callback")
-async def a2a_callback(request: Request):
+async def a2a_callback(request: Request, agent_name: str | None = None):
     """Receive push notifications from A2A agents.
 
     The a2a-sdk's BasePushNotificationSender POSTs the full Task object here.
-    We parse it as a proper A2A Task, then either:
-      1. Correlate it to a pending task we're tracking (async tool call response)
-      2. Fall back to emitting on the event bus (agent-initiated push)
+    Each agent gets a unique callback URL (/a2a-callback/{agent_name}) so we
+    can attribute pushes without relying on task ID lookups, which lose a race
+    with the push notification.
     """
     from a2a.types import Task as A2ATask, TaskState
     from a2a.utils.parts import get_text_parts
@@ -285,14 +286,13 @@ async def a2a_callback(request: Request):
     from runtime.agent import get_pending_task, resolve_pending_task, _extract_task_text
 
     body = await request.json()
-    logger.info("A2A callback received: %s", json.dumps(body)[:200])
+    logger.info("A2A callback received (agent=%s): %s", agent_name, json.dumps(body)[:200])
 
     # Parse as proper A2A Task
     try:
         task = A2ATask.model_validate(body)
     except Exception:
         logger.warning("Could not parse A2A callback as Task, falling back to raw handling")
-        # Legacy fallback for non-standard pushes
         if _event_bus:
             await _event_bus.emit("agent_notification", {"raw": body})
         return JSONResponse({"status": "received", "event": "agent_notification"}, status_code=202)
@@ -301,82 +301,43 @@ async def a2a_callback(request: Request):
     state = task.status.state
     text = _extract_task_text(task)
 
-    # Check if this correlates to a pending async task
+    # Resolve agent name: URL path (always available) > pending task lookup > fallback
     pending = get_pending_task(task_id)
-    if pending:
-        agent_name = pending.get("agent_name", "unknown")
-        original_query = pending.get("query", "")
-
-        await broadcast_activity(
-            f"Push notification from {agent_name}: task {task_id} → {state.value}",
-            "agent",
-            detail={"type": "push_notification", "agent": agent_name, "task_id": task_id, "state": state.value},
-        )
-
-        if state in {TaskState.completed, TaskState.failed, TaskState.canceled, TaskState.rejected}:
-            # Terminal state — build a SkillResult and broadcast
-            resolve_pending_task(task_id)
-
-            result = SkillResult(
-                skill_name=f"notification → {agent_name}",
-                ui_type="card",
-                content={
-                    "title": f"Update from {agent_name}",
-                    "bullets": [text] if text else [f"Task {state.value}"],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "task_id": task_id,
-                    "original_query": original_query,
-                },
-                timestamp=datetime.now(timezone.utc),
-                trigger_type="push_notification",
-                trigger_source=agent_name,
-            )
-            await broadcast_result(result)
-            logger.info("A2A push → SkillResult for task %s from %s (%s)", task_id, agent_name, state.value)
-
-        else:
-            # Non-terminal update (working progress, etc.) — just log activity
-            logger.info("A2A push → task %s from %s still %s", task_id, agent_name, state.value)
-
-        return JSONResponse({"status": "received", "task_id": task_id, "state": state.value}, status_code=202)
-
-    # No pending task match — agent-initiated push notification
-    # Map to event bus for event-driven skills
-    event_type = "agent_notification"
-    source_agent = None
-
-    # Try to identify source from task metadata or text content
-    if task.status.message:
-        msg_text = get_message_text(task.status.message)
-        try:
-            parsed = json.loads(msg_text)
-            event_type = parsed.get("event_type", event_type)
-            source_agent = parsed.get("source_agent") or parsed.get("agent")
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    # Fallback: check artifacts for structured event data
-    if source_agent is None:
-        for artifact in (task.artifacts or []):
-            for part_text in get_text_parts(artifact.parts):
-                try:
-                    parsed = json.loads(part_text)
-                    event_type = parsed.get("event_type", event_type)
-                    source_agent = parsed.get("source_agent") or parsed.get("agent")
-                except (json.JSONDecodeError, TypeError):
-                    pass
+    resolved_agent = agent_name or (pending or {}).get("agent_name") or "unknown"
+    original_query = (pending or {}).get("query", "")
 
     await broadcast_activity(
-        f"Agent push: {source_agent or 'unknown'} → {event_type}",
+        f"Push notification from {resolved_agent}: task {task_id} → {state.value}",
         "agent",
+        detail={"type": "push_notification", "agent": resolved_agent, "task_id": task_id, "state": state.value},
     )
 
-    if _event_bus:
-        payload = {"source_agent": source_agent, "task": body, "text": text}
-        await _event_bus.emit(event_type, payload)
-        logger.info("A2A callback → emitted event '%s' from %s", event_type, source_agent)
+    if state in {TaskState.completed, TaskState.failed, TaskState.canceled, TaskState.rejected}:
+        # Terminal state — build a SkillResult and broadcast
+        if pending:
+            resolve_pending_task(task_id)
 
-    return JSONResponse({"status": "received", "event": event_type}, status_code=202)
+        result = SkillResult(
+            skill_name=f"notification → {resolved_agent}",
+            ui_type="card",
+            content={
+                "title": f"Update from {resolved_agent}",
+                "bullets": [text] if text else [f"Task {state.value}"],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "task_id": task_id,
+                "original_query": original_query,
+            },
+            timestamp=datetime.now(timezone.utc),
+            trigger_type="push_notification",
+            trigger_source=resolved_agent,
+        )
+        await broadcast_result(result)
+        logger.info("A2A push → SkillResult for task %s from %s (%s)", task_id, resolved_agent, state.value)
+    else:
+        # Non-terminal update (working, input-required, etc.) — just log activity
+        logger.info("A2A push → task %s from %s: %s", task_id, resolved_agent, state.value)
+
+    return JSONResponse({"status": "received", "task_id": task_id, "state": state.value}, status_code=202)
 
 
 @app.post("/clear")
