@@ -14,24 +14,41 @@ from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
-_LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
-_LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
+_LLM_GATEWAY_URL = os.getenv("LLM_GATEWAY_URL", "http://localhost:4000")
+_LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("LITELLM_API_KEY", "not-needed"))
 _DB_PATH = os.getenv("DEMO_DB_PATH", "./demo.db")
 
+# Model route → actual provider model name.
+# The route (env var value) is the path prefix in Agent Gateway.
+# The model name is what the provider expects in the request body.
+_MODEL_NAMES = {
+    "bedrock": "mistral.mistral-large-3-675b-instruct",
+    "watsonx": "openai/gpt-oss-120b",
+}
 
-def get_llm(model_env_var: str, fallback_model: str = "claude-sonnet-team-b") -> ChatOpenAI:
-    """Create a ChatOpenAI instance pointed at LiteLLM with the agent's own model."""
-    model = os.getenv(model_env_var, fallback_model)
+_DEFAULT_ROUTE = "bedrock"
+
+
+def get_llm(model_env_var: str, fallback_route: str = _DEFAULT_ROUTE) -> ChatOpenAI:
+    """Create a ChatOpenAI instance routed through Agent Gateway.
+
+    The env var value (e.g. 'watsonx') selects the gateway route path.
+    The actual provider model name is resolved from _MODEL_NAMES.
+    """
+    route = os.getenv(model_env_var, fallback_route)
+    model = _MODEL_NAMES.get(route, route)
+    base_url = f"{_LLM_GATEWAY_URL}/{route}/v1"
     return ChatOpenAI(
         model=model,
-        base_url=_LITELLM_BASE_URL,
-        api_key=_LITELLM_API_KEY,
+        base_url=base_url,
+        api_key=_LLM_API_KEY,
     )
 
 
-def get_model_name(model_env_var: str, fallback_model: str = "claude-sonnet-team-b") -> str:
-    """Return the model name string for this agent."""
-    return os.getenv(model_env_var, fallback_model)
+def get_model_name(model_env_var: str, fallback_route: str = _DEFAULT_ROUTE) -> str:
+    """Return the display name for this agent's model."""
+    route = os.getenv(model_env_var, fallback_route)
+    return _MODEL_NAMES.get(route, route)
 
 
 def get_db() -> sqlite3.Connection:

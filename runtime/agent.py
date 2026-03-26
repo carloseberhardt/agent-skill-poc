@@ -1,6 +1,6 @@
 """
 Thin wrapper around LangGraph's create_react_agent using ChatOpenAI
-pointed at the LiteLLM proxy, with dual tool loading:
+pointed at the Agent Gateway LLM listener, with dual tool loading:
   - MCP tools from Agent Gateway (cost API, employee lookup)
   - A2A agents wrapped as LangChain tools (data agent, security agent)
 
@@ -10,10 +10,10 @@ that declare push_notifications=True in their agent card get non-blocking
 calls with a callback URL — the SDK handles the wire protocol.
 
 The model is an environment concern, not an application concern.
-Switching from anthropic/claude-sonnet to watsonx/granite requires
+Switching from bedrock/mistral to watsonx/gpt-oss requires
 changing one env var — no code changes.
 
-Skills call agent.invoke() — they never import LangChain or LiteLLM directly.
+Skills call agent.invoke() — they never import LangChain directly.
 """
 
 import asyncio
@@ -49,9 +49,15 @@ load_dotenv()
 logger = logging.getLogger("solis.agent")
 wire = logging.getLogger("solis.wire")
 
-_base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
-_model = os.getenv("LITELLM_MODEL", "claude-sonnet-team-b")
-_api_key = os.getenv("LITELLM_API_KEY", "")
+# LLM routing — model route selects Agent Gateway path, model name goes to provider
+_LLM_GATEWAY_URL = os.getenv("LLM_GATEWAY_URL", "http://localhost:4000")
+_MODEL_NAMES = {
+    "bedrock": "mistral.mistral-large-3-675b-instruct",
+    "watsonx": "openai/gpt-oss-120b",
+}
+_llm_route = os.getenv("LLM_MODEL", os.getenv("LITELLM_MODEL", "bedrock"))
+_model = _MODEL_NAMES.get(_llm_route, _llm_route)
+_api_key = os.getenv("LLM_API_KEY", os.getenv("LITELLM_API_KEY", "not-needed"))
 
 # Agent Gateway endpoints
 _gateway_url = os.getenv("AGENT_GATEWAY_URL", "http://localhost:3000")
@@ -59,7 +65,7 @@ _gateway_mcp_url = os.getenv("AGENT_GATEWAY_MCP_URL", "http://localhost:3000/mcp
 _a2a_agents = [a.strip() for a in os.getenv("AGENT_GATEWAY_A2A_AGENTS", "").split(",") if a.strip()]
 _callback_url = os.getenv("RUNTIME_CALLBACK_URL", "http://localhost:8000/a2a-callback")
 
-_llm = ChatOpenAI(model=_model, base_url=_base_url, api_key=_api_key)
+_llm = ChatOpenAI(model=_model, base_url=f"{_LLM_GATEWAY_URL}/{_llm_route}/v1", api_key=_api_key)
 
 # A2A agent names — used to distinguish agent calls from tool calls in activity feed
 _a2a_tool_names: set[str] = set()
