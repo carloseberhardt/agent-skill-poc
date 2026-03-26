@@ -1,18 +1,21 @@
-# Agent Gateway config — routes A2A agents and MCP tool servers
-# A2A agents: data-agent (5001), security-agent (5002)
+# Agent Gateway config — unified A2A, MCP, and LLM routing
+# A2A agents: data-agent (5001), security-agent (5002), delivery-agent (5006)
 # MCP servers: cost-api (5003), employee-lookup (5004), discord-notifier (5005)
+# LLM models: /bedrock → Mistral Large (Bedrock), /watsonx → GPT-OSS-120B (WatsonX)
 
 binds:
+  # --- A2A + MCP routing ---
   - port: 3000
     listeners:
       - name: main
         protocol: HTTP
         routes:
-          # --- A2A: data-agent ---
           - name: data-agent
             matches:
               - path:
                   pathPrefix: /data-agent
+            backends:
+              - host: host.docker.internal:5001
             policies:
               cors:
                 allowOrigins: ["*"]
@@ -21,14 +24,13 @@ binds:
               urlRewrite:
                 path:
                   prefix: /
-            backends:
-              - host: host.docker.internal:5001
 
-          # --- A2A: security-agent ---
           - name: security-agent
             matches:
               - path:
                   pathPrefix: /security-agent
+            backends:
+              - host: host.docker.internal:5002
             policies:
               cors:
                 allowOrigins: ["*"]
@@ -37,14 +39,13 @@ binds:
               urlRewrite:
                 path:
                   prefix: /
-            backends:
-              - host: host.docker.internal:5002
 
-          # --- A2A: delivery-agent ---
           - name: delivery-agent
             matches:
               - path:
                   pathPrefix: /delivery-agent
+            backends:
+              - host: host.docker.internal:5006
             policies:
               cors:
                 allowOrigins: ["*"]
@@ -53,19 +54,11 @@ binds:
               urlRewrite:
                 path:
                   prefix: /
-            backends:
-              - host: host.docker.internal:5006
 
-          # --- MCP tool federation ---
           - name: mcp-tools
             matches:
               - path:
                   pathPrefix: /mcp
-            policies:
-              cors:
-                allowOrigins: ["*"]
-                allowHeaders: [content-type, cache-control, mcp-protocol-version]
-                exposeHeaders: [Mcp-Session-Id]
             backends:
               - mcp:
                   targets:
@@ -78,3 +71,63 @@ binds:
                     - name: discord-notifier
                       mcp:
                         host: http://host.docker.internal:5005/mcp
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: [content-type, cache-control, mcp-protocol-version]
+                exposeHeaders: [Mcp-Session-Id]
+
+  # --- LLM routing (replaces LiteLLM proxy) ---
+  - port: 4000
+    listeners:
+      - name: llm
+        protocol: HTTP
+        routes:
+          - name: bedrock
+            matches:
+              - path:
+                  pathPrefix: /bedrock
+            backends:
+              - ai:
+                  name: mistral-large-bedrock
+                  provider:
+                    bedrock:
+                      model: mistral.mistral-large-3-675b-instruct
+                      region: us-east-1
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: ["*"]
+              urlRewrite:
+                path:
+                  prefix: /
+
+          - name: watsonx
+            matches:
+              - path:
+                  pathPrefix: /watsonx
+            backends:
+              - ai:
+                  name: opengpt-watsonx
+                  hostOverride: "us-south.ml.cloud.ibm.com:443"
+                  pathOverride: "/ml/v1/chat/completions?version=2024-05-31"
+                  provider:
+                    openAI:
+                      model: openai/gpt-oss-120b
+                  policies:
+                    backendAuth:
+                      key: "$WATSONX_API_KEY"
+                    backendTLS: {}
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: ["*"]
+              urlRewrite:
+                path:
+                  prefix: /
+              # WatsonX requires project_id in the request body (not URL or header).
+              # This CEL transformation injects it into every LLM request.
+              # Not visible in the Agent Gateway UI — runs at request time.
+              ai:
+                transformations:
+                  project_id: "'$WATSONX_PROJECT_ID'"

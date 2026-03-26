@@ -404,7 +404,7 @@ async def status():
         "status": "running",
         "uptime_seconds": round(time.time() - _start_time, 1),
         "skills_loaded": len(_skills),
-        "model": os.getenv("LITELLM_MODEL", "unknown"),
+        "model": os.getenv("LLM_MODEL", "bedrock"),
         "event_subscriptions": _event_bus.subscriptions if _event_bus else {},
         "timer": timer,
     }
